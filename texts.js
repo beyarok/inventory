@@ -5,7 +5,7 @@ window.T = {
   field: {
     hello: 'שלום {name}',
     myCard: 'הציוד שלי',
-    myCardLine: 'משכת {pulls} · כלים {tools}',
+    myCardLine: 'משכת {pulls} · רשום עליך {tools}',
     myCardEmpty: 'אין ציוד רשום עליך',
     actions: {
       take: 'לקחת',
@@ -60,12 +60,12 @@ window.T = {
     failed: 'לא נרשם: {item} – {error}',
 
     tabPulls: 'משכתי',
-    tabTools: 'כלים עליי ({n})',
+    tabTools: 'רשום עליי ({n})',
     pullLine: '{date} · מ{from}',
     returnSurplus: 'החזרתי עודף',
     pullsHint: 'מה שמשכת לפרויקטים פתוחים',
     pullsEmpty: 'לא משכת מתכלה לפרויקטים פתוחים',
-    toolsEmpty: 'אין כלים רשומים עליך',
+    toolsEmpty: 'אין ציוד רשום עליך',
     today: 'היום',
     yesterday: 'אתמול',
 

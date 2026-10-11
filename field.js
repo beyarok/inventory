@@ -139,6 +139,8 @@
   const repairLoc = () => S.data.locations.find(l => l.type === 'repair');
 
   function myTools() { return (S.data.personal.tools || []).filter(t => item(t.itemId)); }
+  // כמה דברים רשומים על העובד: כלים לפי כמות, מתכלה – פריט אחד לכל סוג
+  function heldCount() { return myTools().reduce((s, t) => s + (kindOf(t.itemId) === 'tool' ? t.qty : 1), 0); }
   function myPulls() { return (S.data.personal.pulls || []).filter(p => item(p.itemId) && S.ix.projects[p.projectId]); }
 
   // ---------- ניווט ----------
@@ -197,7 +199,7 @@
   VIEWS.home = () => {
     const d = S.data;
     const pulls = myPulls().length;
-    const tools = myTools().reduce((s, t) => s + t.qty, 0);
+    const tools = heldCount();
     const recents = (d.personal.recentItemIds || []).filter(id => item(id) && isLeaf(id)).slice(0, 5);
     const act = a => '<button class="act" data-a="action" data-action="' + a + '">' + ICON[a] + esc(TX.actions[a]) + '</button>';
     return top(fmt(TX.hello, { name: d.me.name }), false) + '<main class="body">' + banners() +
@@ -235,7 +237,7 @@
     }
     let h = '';
     if (!v.folder && MINE_FIRST.indexOf(v.action) >= 0) {
-      const rows = myTools().map(t => itemRow(t.itemId, { a, qty: num(t.qty) }));
+      const rows = myTools().map(t => itemRow(t.itemId, { a, qty: qtyLabel(t.qty, t.itemId), extra: ' data-held="1"' }));
       if (v.action === 'return') {
         myPulls().forEach(p => rows.push(itemRow(p.itemId, {
           a, qty: qtyLabel(p.qty, p.itemId), sub: S.ix.projects[p.projectId].name,
@@ -324,6 +326,13 @@
     return all;
   }
 
+  // מתכלה שרשום על העובד עצמו (לא "משכתי" לפרויקט)
+  function heldReturn(v) {
+    if (!v.itemId || v.projectId) return false;
+    if (v.held) return true;
+    return qtyAt(v.itemId, me()) > 0 && !myPulls().some(p => p.itemId === v.itemId);
+  }
+
   function spec(v) {
     const id = v.itemId;
     const tool = id ? kindOf(id) === 'tool' : false;
@@ -334,7 +343,8 @@
         else { s.type = 'pull'; s.from = id ? withStock(id, locChips(STOCK_TYPES, id)) : locChips(STOCK_TYPES); s.fixedTo = 'X'; s.project = true; }
         break;
       case 'return':
-        if (tool) { s.type = 'transfer'; s.fixedFrom = me(); s.to = locChips(STOCK_TYPES); }
+        // כלי, או מתכלה שרשום על העובד (הועבר אליו, לא נמשך לפרויקט) – העברה ממנו למחסן
+        if (tool || heldReturn(v)) { s.type = 'transfer'; s.fixedFrom = me(); s.to = locChips(STOCK_TYPES); }
         else { s.type = 'return_surplus'; s.fixedFrom = 'X'; s.to = locChips(STOCK_TYPES); s.project = true; }
         break;
       case 'transfer':
@@ -380,7 +390,7 @@
     }
     // מחזיר/מעביר פחות מגליל שלם (למשל 30 מטר) – מתחילים במטרים
     const max = myMax(v, v.projectId);
-    if (v.unitMode === 'buy' && max !== null && max < buyPer(v.itemId)) v.unitMode = 'stock';
+    if (v.unitMode === 'buy' && max !== null && max % buyPer(v.itemId) !== 0) v.unitMode = 'stock';
     v.what = 'broken';
     autoProject(v);
   }
@@ -532,7 +542,7 @@
   VIEWS.mine = v => {
     const tab = v.tab || 'pulls';
     const tools = myTools();
-    const toolCount = tools.reduce((s, t) => s + t.qty, 0);
+    const toolCount = heldCount();
     let h = top(TX.myCard, true) + '<main class="body"><div class="tabs">' +
       '<button class="' + (tab === 'pulls' ? 'on' : '') + '" data-a="tab" data-tab="pulls">' + esc(TX.tabPulls) + '</button>' +
       '<button class="' + (tab === 'tools' ? 'on' : '') + '" data-a="tab" data-tab="tools">' + esc(fmt(TX.tabTools, { n: toolCount })) + '</button></div>';
@@ -552,7 +562,7 @@
       return h + '<div class="hint">' + esc(TX.pullsHint) + '</div></main>';
     }
     if (!tools.length) return h + '<div class="empty">' + esc(TX.toolsEmpty) + '</div></main>';
-    return h + '<div class="list">' + tools.map(t => itemRow(t.itemId, { a: 'card', qty: num(t.qty) })).join('') + '</div></main>';
+    return h + '<div class="list">' + tools.map(t => itemRow(t.itemId, { a: 'card', qty: qtyLabel(t.qty, t.itemId) })).join('') + '</div></main>';
   };
 
   VIEWS.message = v => top('', false) + '<div class="center">' + esc(v.text) + '</div>';
@@ -598,7 +608,7 @@
     if (itemId) return go({ v: 'finish', action: a, itemId });
     go({ v: 'pick', action: a, q: '' });
   };
-  H.pickItem = el => go({ v: 'finish', action: cur().action, itemId: el.dataset.id, projectId: el.dataset.project || '' });
+  H.pickItem = el => go({ v: 'finish', action: cur().action, itemId: el.dataset.id, projectId: el.dataset.project || '', held: el.dataset.held === '1' });
   H.returnSurplus = el => go({ v: 'finish', action: 'return', itemId: el.dataset.id, projectId: el.dataset.project });
   H.unknown = () => go({ v: 'unknown', action: cur().action || 'take', text: cur().q || '' });
   H.unknownGo = () => {
