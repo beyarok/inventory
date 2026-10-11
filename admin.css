@@ -137,7 +137,7 @@ details.help ol, details.help ul { padding-right: 22px; margin: 6px 0; }
 #sync { position: fixed; top: 12px; left: 16px; z-index: 45; background: #fff; border: 1px solid var(--line); color: var(--muted);
   border-radius: 999px; padding: 4px 12px; font-size: 13px; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
 .toast { position: fixed; bottom: 18px; left: 18px; z-index: 50; background: var(--brown); color: #fff; padding: 10px 16px; border-radius: 10px; max-width: 420px; }
-.toast.err { background: var(--danger); }
+.toast.err { background: var(--danger); color: #fff; font-size: 15px; }
 
 /* חלונות */
 .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex; align-items: center; justify-content: center; z-index: 40; padding: 16px; }
