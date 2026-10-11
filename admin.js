@@ -683,7 +683,8 @@
     pulls.forEach(x => { (byProject[x.projectId] = byProject[x.projectId] || []).push(x); });
     return cards + '<div class="split" style="grid-template-columns:1fr 1fr"><div class="box"><b>' + esc(TA.personPulls) + '</b>' +
       (pulls.length ? Object.keys(byProject).map(prj => '<h2 style="margin:10px 0 4px;font-size:15px">' + esc((A.ix.projects[prj] || {}).name) + '</h2>' +
-        byProject[prj].map(x => '<div class="kv"><span>' + esc(displayName(x.itemId)) + '</span><span>' + num(x.qty) + ' ' + esc(unitLabel(x.itemId)) + '</span></div>').join('')).join('')
+        byProject[prj].map(x => '<div class="kv"><span>' + esc(displayName(x.itemId)) + '</span><span class="inline">' + num(x.qty) + ' ' + esc(unitLabel(x.itemId)) +
+          ' <button class="btn sm" data-a="returnPull" data-id="' + x.itemId + '" data-project="' + prj + '" data-person="' + pid + '">' + esc(TA.returnToStock) + '</button></span></div>').join('')).join('')
         : '<div class="muted">' + esc(TA.nothing) + '</div>') + '</div>' +
       '<div class="box"><b>' + esc(TA.personTools) + '</b>' + (tools.length ? tools.map(id => '<div class="kv"><span>' + esc(displayName(id)) + '</span><span class="inline">' + num(A.d.stock[id]['P:' + pid]) + ' <button class="btn sm" data-a="moveStock" data-id="' + id + '" data-from="P:' + pid + '">' + esc(TA.moveStock) + '</button></span></div>').join('')
         : '<div class="muted">' + esc(TA.nothing) + '</div>') + '</div></div>';
@@ -1693,6 +1694,34 @@
         if (!Number.isInteger(qty) || qty <= 0) return TA.qtyMissing;
         if (v.from === v.to) return TA.sameFromTo;
         if (qty > (row[v.from] || 0)) return fmt(TA.onlyThere, { n: num(row[v.from] || 0) });
+        return '';
+      },
+    }));
+  };
+  // מתכלה שעובד משך ולא השתמש בו – חוזר למחסן ("החזרת עודף" בשם העובד, כדי שיירד לו מ"משכתי")
+  H.returnPull = el => {
+    const id = el.dataset.id;
+    const projectId = el.dataset.project;
+    const personId = el.dataset.person;
+    const pulled = pullsOf(personId).filter(p => p.itemId === id && p.projectId === projectId).reduce((s, p) => s + p.qty, 0);
+    const unit = unitName(id);
+    const places = A.d.tables.Locations.filter(l => !l.archived && l.type !== 'repair').map(l => ['L:' + l.id, l.name]);
+    const hub = A.d.tables.Locations.find(l => l.type === 'hub' && !l.archived);
+    formBox(fmt(TA.returnTitle, { item: displayName(id), person: (A.ix.people[personId] || {}).name || '' }), [
+      { k: 'to', label: TA.moveTo, type: 'select', options: places },
+      { k: 'qty', label: TA.cQty + (unit ? ' (' + unit + ')' : '') },
+    ], { to: hub ? 'L:' + hub.id : places[0][0], qty: pulled }, Object.assign(v => {
+      const qty = Number(v.qty);
+      return optimistic('admin.movement.add', { movement: { type: 'return_surplus', itemId: id, qty, from: 'X', to: v.to, projectId, byPersonId: personId } }, d => {
+        d.tables.Movements.push({ id: tmpId(), at: new Date().toISOString(), type: 'return_surplus', itemId: id, qty, from: 'X', to: v.to, projectId, byPersonId: personId });
+        d.stock[id] = d.stock[id] || {};
+        d.stock[id][v.to] = (d.stock[id][v.to] || 0) + qty;
+      });
+    }, {
+      validate: v => {
+        const qty = Number(v.qty);
+        if (!Number.isInteger(qty) || qty <= 0) return TA.qtyMissing;
+        if (qty > pulled) return fmt(TA.onlyPulled, { n: num(pulled) });
         return '';
       },
     }));

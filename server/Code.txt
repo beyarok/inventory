@@ -552,6 +552,14 @@ function recordMovement_(inp, actor, isAdmin) {
   };
   const flags = [];
 
+  // מנהל שרושם בשם עובד (למשל החזרת עודף שהעובד משך) – כדי שזה יירד מ"משכתי" של העובד
+  if (isAdmin && inp.byPersonId && inp.byPersonId !== actor.id) {
+    const p = Db.byId('People', inp.byPersonId);
+    if (!p) userError_(MSG.missing + 'עובד');
+    m.byPersonId = p.id;
+    m.note = ('נרשם ע"י ' + actor.name + (m.note ? ' · ' + m.note : '')).slice(0, 500);
+  }
+
   // ---- קבלה מהזמנה: הפריט, הספק והמחיר מגיעים מההזמנה ----
   if (type === 'receive') {
     const line = Db.byId('OrderLines', inp.orderLineId);
