@@ -1,6 +1,6 @@
 // גרסת Firebase: שומר את קבצי הדף בטלפון (כולל ספריית Firebase), כדי שייפתח מיד – גם בלי קליטה.
 // בכל עדכון של הדף מעלים את מספר הגרסה.
-const VERSION = 'field2-6';
+const VERSION = 'field2-7';
 const FB = 'https://www.gstatic.com/firebasejs/12.4.0/';
 const FILES = ['./', 'index.html', 'config.js', 'core.js', 'engine.js', 'manifest.webmanifest',
   '../field.css', '../field.js', '../texts.js', '../icons/icon.svg',
@@ -36,4 +36,14 @@ self.addEventListener('fetch', e => {
       return res;
     }).catch(() => caches.match(e.request, { ignoreSearch: true }))
   );
+});
+
+// לחיצה על התראה: פותחים את המסך (או עוברים אליו אם כבר פתוח)
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || './admin.html';
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+    const open = list.find(c => c.url.indexOf('/inventory/') >= 0);
+    return open ? open.focus() : self.clients.openWindow(url);
+  }));
 });

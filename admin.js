@@ -1188,7 +1188,9 @@
       admins.map(p => '<tr><td>' + esc(p.name) + '</td><td>' + esc(p.email) + '</td><td><input type="checkbox" data-a="toggleAlerts" data-id="' + p.id + '"' + (p.alerts ? ' checked' : '') + '></td></tr>').join('') +
       '</table><div class="btns" style="margin-top:10px"><button class="btn" data-a="addAdmin">' + ICON.plus + esc(TA.sAddAdmin) + '</button></div></div>' +
       '<div class="box" style="margin-top:12px"><h2 style="margin-top:0">' + esc(TA.sBackup) + '</h2><div class="hint" style="margin-bottom:8px">' + esc(TA.sBackupHint) + '</div>' +
-      '<button class="btn" data-a="backupNow">' + esc(TA.backupNow) + '</button></div>';
+      '<button class="btn" data-a="backupNow">' + esc(TA.backupNow) + '</button></div>' +
+      (window.ENGINE ? '<div class="box" style="margin-top:12px"><h2 style="margin-top:0">' + esc(TA.sNotify) + '</h2><div class="hint" style="margin-bottom:8px">' + esc(TA.sNotifyHint) + '</div>' +
+        '<button class="btn" data-a="testNotify">' + esc(TA.testNotify) + '</button></div>' : '');
   };
 
   // ---------- עזרה ----------
@@ -1977,6 +1979,23 @@
   };
   H.addAdmin = () => formBox(TA.sAddAdmin, [{ k: 'name', label: TA.fName }, { k: 'email', label: TA.fEmail }, { k: 'alerts', label: TA.fAlerts, type: 'check' }],
     { alerts: true }, v => saveQuiet('People', Object.assign({ role: 'admin' }, v)));
+  // התראה לדוגמה בטלפון (ניסיון – עוד לא התראות אמיתיות)
+  H.testNotify = async () => {
+    if (!('Notification' in window) || !('serviceWorker' in navigator)) return toast(TA.notifyUnsupported, true);
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') return toast(TA.notifyDenied, true);
+    try {
+      await navigator.serviceWorker.register('sw.js');
+      const reg = await navigator.serviceWorker.ready;
+      await reg.showNotification(TA.notifySampleTitle, {
+        body: TA.notifySampleBody, icon: '../icons/icon-192.png', badge: '../icons/icon-192.png',
+        dir: 'rtl', lang: 'he', tag: 'test', data: { url: location.href },
+      });
+      toast(TA.notifySent);
+    } catch (e) {
+      toast(TA.notifyUnsupported, true);
+    }
+  };
   H.backupNow = async () => {
     const r = await mutate('admin.backup.now', {}, null);
     if (r.ok) toast(fmt(TA.backupDone, { name: r.data.name }));
