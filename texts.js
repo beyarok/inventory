@@ -29,6 +29,8 @@ window.T = {
     noResults: 'לא מצאתי "{q}"',
     unknownLink: 'לא מוצא את הפריט? כתוב מה זה',
     unknownField: 'מה לקחת, במילים שלך',
+    unknownFieldCount: 'מה ספרת, במילים שלך',
+    unknownFieldFound: 'מה מצאת, במילים שלך',
     unknownHint: 'המנהל יוסיף את הפריט למערכת',
     continue: 'המשך',
     back: 'חזרה',
@@ -83,6 +85,7 @@ window.T = {
     brokenOpt: 'נהרס',
     lostOpt: 'אבד',
     countQ: 'כמה יש בפועל ב{place}?',
+    countQNoPlace: 'כמה יש בפועל?',
     supplier: 'לאיזה ספק',
 
     overdraw: 'לפי המערכת יש ב{place} רק {n}. לרשום בכל זאת?',

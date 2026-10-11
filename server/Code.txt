@@ -583,10 +583,10 @@ function recordMovement_(inp, actor, isAdmin) {
   if (type === 'count') {
     const at = inp.from || inp.to;
     if (!at || at === 'X') userError_(MSG.missing + 'מקום');
-    if (unknown) userError_(MSG.missing + 'פריט');
     const counted = Number(inp.countedQty);
     if (!Number.isInteger(counted) || counted < 0) userError_(MSG.qtyMissing);
-    const diff = counted - Model.qtyAt(m.itemId, at);
+    // פריט לא מוכר שנספר: אין לו מלאי במערכת, אז כל מה שנספר נכנס (כשהמנהל ישייך אותו – זה יהיה המלאי שלו)
+    const diff = counted - (unknown ? 0 : Model.qtyAt(m.itemId, at));
     if (diff === 0) return { id: null, nochange: true };
     m.qty = Math.abs(diff);
     m.from = diff < 0 ? at : 'X';

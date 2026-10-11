@@ -211,7 +211,9 @@
 
   // בחירת פריט: חיפוש, "מה רשום עליך", אחרונים, ועץ שנפתח כמו תיקיות
   const MINE_FIRST = ['return', 'transfer', 'broken', 'repairOut'];
-  const ALLOW_UNKNOWN = ['take', 'purchase', null];
+  // פעולות שאפשר לעשות גם על פריט שעוד לא קיים במערכת ("לא מוצא את הפריט? כתוב מה זה")
+  const ALLOW_UNKNOWN = ['take', 'purchase', 'count', 'found', null];
+  const unknownLabel = a => ({ count: TX.unknownFieldCount, found: TX.unknownFieldFound }[a] || TX.unknownField);
 
   VIEWS.pick = v => {
     const title = v.action ? fmt(TX.pickTitle, { action: TX.actions[v.action] }) : TX.allItems;
@@ -263,7 +265,7 @@
   }
 
   VIEWS.unknown = v => top(fmt(TX.pickTitle, { action: TX.actions[v.action || 'take'] }), true) + '<main class="body">' +
-    '<div class="field"><div class="label">' + esc(TX.unknownField) + '</div>' +
+    '<div class="field"><div class="label">' + esc(unknownLabel(v.action)) + '</div>' +
     '<input id="unknownText" class="text" maxlength="200" value="' + esc(v.text || '') + '"></div>' +
     '<div class="hint">' + esc(TX.unknownHint) + '</div><div id="err" class="error"></div>' +
     '<button class="send" data-a="unknownGo">' + esc(TX.continue) + '</button></main>';
@@ -413,7 +415,7 @@
       chipsHtml('what', [chip('broken', TX.brokenOpt), chip('lost', TX.lostOpt)], v.what) + '</div>';
     if (s.counted) {
       h += '<div class="field"><div class="label">' + esc(TX.from) + '</div>' + chipsHtml('from', s.from, v.from) + '</div>';
-      h += '<div class="field"><div class="label">' + esc(fmt(TX.countQ, { place: v.from ? holderName(v.from) : '' })) + '</div>' + stepper(v, unit) + '</div>';
+      h += '<div class="field"><div class="label">' + esc(v.from ? fmt(TX.countQ, { place: holderName(v.from) }) : TX.countQNoPlace) + '</div>' + stepper(v, unit) + '</div>';
     } else {
       const max = myMax(v, v.projectId);
       h += '<div class="field"><div class="label">' + esc(TX.qty) + '</div>' + stepper(v, unit) +
@@ -597,8 +599,8 @@
   H.unknown = () => go({ v: 'unknown', action: cur().action || 'take', text: cur().q || '' });
   H.unknownGo = () => {
     const text = document.getElementById('unknownText').value.trim();
-    if (!text) { document.getElementById('err').textContent = fmt(TX.missing, { field: TX.unknownField }); return; }
-    const action = cur().action === 'purchase' ? 'purchase' : 'take';
+    if (!text) { document.getElementById('err').textContent = fmt(TX.missing, { field: unknownLabel(cur().action) }); return; }
+    const action = ['purchase', 'count', 'found'].indexOf(cur().action) >= 0 ? cur().action : 'take';
     go({ v: 'finish', action, unknownText: text });
   };
   H.order = el => go({ v: 'receiveOrder', orderId: el.dataset.id });
