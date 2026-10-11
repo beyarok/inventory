@@ -338,6 +338,9 @@ window.T = {
     backupNow: 'גבה עכשיו',
     backupDone: 'נשמר גיבוי: {name}',
     helpSearch: 'חיפוש בעזרה',
+    syncSaving: 'שומר…',
+    syncLoading: 'מתעדכן…',
+    offline: 'אין חיבור לשרת. נסה שוב בעוד רגע.',
 
     error: 'לא הצלחתי לשמור. נסה שוב בעוד רגע.',
     conflict: 'מישהו אחר שינה את זה בינתיים. רענן ונסה שוב.',

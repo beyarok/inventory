@@ -73,44 +73,96 @@
     return res.json();
   }
 
+  // ---------- נתונים: שמורים בדפדפן, מתעדכנים ברקע ----------
+  // השרת של גוגל עונה תוך 2–13 שניות. לכן המסך תמיד מוצג מיד מהנתונים השמורים,
+  // וכל פנייה לשרת רצה ברקע עם חיווי קטן "מתעדכן" / "שומר".
+  const CACHE_KEY = 'inv:admin:data';
+  let loading = 0;
+  let saving = 0;
+
+  function setData(d) {
+    A.d = d;
+    buildIndex();
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify(d)); } catch (e) { /* אחסון מלא – ממשיכים בלי */ }
+  }
+
+  // לא מציירים מחדש באמצע הקלדה או כשחלון פתוח – כדי לא למחוק מה שמקלידים
+  function safeRender() {
+    const el = document.activeElement;
+    if (document.getElementById('modal') || (el && /INPUT|SELECT|TEXTAREA/.test(el.tagName) && el.id !== 'itemQ' && el.id !== 'stockQ')) {
+      A.dirty = true;
+      return;
+    }
+    A.dirty = false;
+    render();
+  }
+
+  function syncState() {
+    let el = document.getElementById('sync');
+    const text = saving ? TA.syncSaving : loading ? TA.syncLoading : '';
+    if (!text) { if (el) el.remove(); return; }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'sync';
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+  }
+
   async function load() {
+    loading++;
+    syncState();
     try {
       const r = await api('admin.bootstrap');
       if (!r.ok) {
         if (r.code === 'AUTH') return logout(TA.sessionExpired);
         return toast(r.error || TA.error, true);
       }
-      A.d = r.data;
-      buildIndex();
-      render();
+      setData(r.data);
+      safeRender();
     } catch (e) {
-      toast(TA.error, true);
+      toast(TA.offline, true);
+    } finally {
+      loading--;
+      syncState();
     }
   }
 
-  // פעולה שמשנה נתונים: מציגה הודעה, ואז טוענת הכל מחדש
+  // פעולה שמשנה נתונים. השרת מחזיר באותה תשובה גם את כל הנתונים המעודכנים.
   async function mutate(action, payload, okMsg) {
     let r;
+    saving++;
+    syncState();
     try {
-      r = await api(action, payload);
+      r = await api(action, Object.assign({ withBoot: true }, payload));
     } catch (e) {
-      toast(TA.error, true);
-      return { ok: false };
+      toast(TA.offline, true);
+      return { ok: false, error: TA.offline };
+    } finally {
+      saving--;
+      syncState();
     }
     if (!r.ok) {
       if (r.code === 'AUTH') { logout(TA.sessionExpired); return r; }
       if (r.code !== 'PARENT_HAS_STOCK') toast(r.error || TA.error, true);
       return r;
     }
+    if (r.data && r.data.boot) {
+      setData(r.data.boot);
+      r = Object.assign({}, r, { data: r.data.result });
+    }
     if (okMsg !== null) toast(okMsg || TA.saved);
-    await load();
+    safeRender();
     return r;
   }
 
   function logout(msg) {
     A.session = '';
     A.d = null;
-    try { localStorage.removeItem('inv:admin:session'); } catch (e) { /* */ }
+    try {
+      localStorage.removeItem('inv:admin:session');
+      localStorage.removeItem(CACHE_KEY);
+    } catch (e) { /* */ }
     A.loginMsg = msg || '';
     render();
   }
@@ -1040,7 +1092,11 @@
     if (first) first.focus();
     return bg;
   }
-  function closeModal() { const m = document.getElementById('modal'); if (m) m.remove(); }
+  function closeModal() {
+    const m = document.getElementById('modal');
+    if (m) m.remove();
+    if (A.dirty) setTimeout(safeRender, 0);
+  }
 
   function confirmBox(text, yes, danger) {
     return new Promise(resolve => {
@@ -1103,12 +1159,17 @@
         bg.querySelectorAll('[data-k]').forEach(el => { out[el.dataset.k] = el.type === 'checkbox' ? el.checked : el.value; });
         return out;
       };
-      bg.addEventListener('click', async e => {
+      // החלון נסגר מיד והשמירה רצה ברקע. onSave יכול להחזיר טקסט = שגיאה מקומית, והחלון נשאר פתוח.
+      bg.addEventListener('click', e => {
         const b = e.target.closest('[data-r]');
         if (!b) return;
         if (b.dataset.r === '0') { closeModal(); resolve(null); return; }
-        const r = await onSave(collect());
-        if (r && r.ok) { closeModal(); resolve(r); } else bg.querySelector('#ferr').textContent = (r && r.error) || TA.error;
+        const values = collect();
+        const local = onSave.validate ? onSave.validate(values) : '';
+        if (local) { bg.querySelector('#ferr').textContent = local; return; }
+        closeModal();
+        resolve(values);
+        onSave(values);
       });
     });
   }
@@ -1300,13 +1361,9 @@
     formBox(fmt(TA.setQtyTitle, { item: displayName(id) }), [
       { k: 'place', label: TA.setQtyPlace, type: 'select', options: places },
       { k: 'counted', label: TA.setQtyCount },
-    ], rec, async v => {
-      const n = Number(v.counted);
-      if (v.counted === '' || !Number.isInteger(n) || n < 0) return { ok: false, error: TA.cQty };
-      const r = await api('admin.movement.add', { movement: { type: 'count', itemId: id, countedQty: n, from: v.place } });
-      if (r.ok) { toast(TA.saved); await load(); }
-      return r;
-    });
+    ], rec, Object.assign(
+      v => mutate('admin.movement.add', { movement: { type: 'count', itemId: id, countedQty: Number(v.counted), from: v.place } }),
+      { validate: v => (v.counted === '' || !Number.isInteger(Number(v.counted)) || Number(v.counted) < 0 ? TA.qtyMissing : '') }));
     const m = document.getElementById('modal');
     if (m) m.querySelector('.form').insertAdjacentHTML('afterend', '<div class="hint">' + esc(TA.setQtyHint) + '</div>');
   };
@@ -1344,8 +1401,8 @@
       { k: 'supplierId', label: TA.fSupplier, type: 'select', options: sups },
       { k: 'destId', label: TA.fDest, type: 'select', options: dests },
     ], { supplierId: sups.length ? sups[0][0] : '', destId: hub ? hub.id : '' }, async v => {
-      const r = await api('admin.order.save', { order: { supplierId: v.supplierId, destId: v.destId, lines: [] } });
-      if (r.ok) { A.orderId = r.data.id; await load(); }
+      const r = await mutate('admin.order.save', { order: { supplierId: v.supplierId, destId: v.destId, lines: [] } }, null);
+      if (r.ok) { A.orderId = r.data.id; safeRender(); }
       return r;
     });
   };
@@ -1421,8 +1478,8 @@
   H.openProject = el => { A.projectId = el.dataset.id; render(); };
   const PROJECT_FIELDS = [{ k: 'name', label: TA.fName }, { k: 'note', label: TA.fNote }];
   H.newProject = () => formBox(TA.newProject, PROJECT_FIELDS, {}, async v => {
-    const r = await api('admin.save', { entity: 'Projects', record: v });
-    if (r.ok) { A.projectId = r.data.id; toast(TA.saved); await load(); }
+    const r = await mutate('admin.save', { entity: 'Projects', record: v });
+    if (r.ok) { A.projectId = r.data.id; safeRender(); }
     return r;
   });
   H.editProject = () => {
@@ -1499,16 +1556,9 @@
     formBox(TA.edit + ' · ' + rec.name, LIST_FIELDS[ent], rec,
       values => saveQuiet(ent, Object.assign({ id: rec.id }, values)));
   };
-  // שגיאה מוצגת בתוך החלון, לא כהודעה קופצת
-  async function saveQuiet(entity, record) {
-    try {
-      const r = await api('admin.save', { entity, record });
-      if (r.ok) { toast(TA.saved); await load(); }
-      else if (r.code === 'AUTH') logout(TA.sessionExpired);
-      return r;
-    } catch (e) {
-      return { ok: false, error: TA.error };
-    }
+  // שמירה מחלון טופס – רצה ברקע; שגיאה (למשל שם כפול) מופיעה כהודעה קופצת
+  function saveQuiet(entity, record) {
+    return mutate('admin.save', { entity, record });
   }
   H.listArchive = async el => {
     const ent = A.listTab;
@@ -1602,6 +1652,13 @@
   });
 
   function start() {
+    // פתיחה מיידית מהנתונים השמורים מהפעם הקודמת; העדכון מהשרת מגיע ברקע
+    if (A.session) {
+      try {
+        const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+        if (cached && cached.tables) { A.d = cached; buildIndex(); }
+      } catch (e) { /* אין נתונים שמורים */ }
+    }
     render();
     if (A.session) load();
     // רענון שקט כל שתי דקות, כשאין חלון פתוח (כדי לא למחוק מה שמקלידים)
