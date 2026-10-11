@@ -75,14 +75,14 @@
     d.suppliers.forEach(s => { ix.sups[s.id] = s; });
     d.projects.forEach(p => { ix.projects[p.id] = p; });
     d.orders.forEach(o => { ix.orders[o.id] = o; });
-    ix.leaves = d.items.filter(i => !ix.children[i.id]);
+    ix.leaves = d.items.filter(i => !ix.children[i.id] && !i.isFolder);
     ix.search = {};
     ix.leaves.forEach(i => { ix.search[i.id] = norm([i.name, i.aliases, pathNames(i.id, ix).join(' ')].join(' ')); });
     S.ix = ix;
   }
 
   const item = id => S.ix.items[id];
-  const isLeaf = id => !S.ix.children[id];
+  const isLeaf = id => !S.ix.children[id] && !(S.ix.items[id] || {}).isFolder;
   function inherited(id, f) {
     let it = item(id), g = 0;
     while (it && g++ < 50) { if (it[f]) return it[f]; it = item(it.parentId); }

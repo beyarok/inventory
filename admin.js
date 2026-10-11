@@ -80,11 +80,59 @@
   let loading = 0;
   let saving = 0;
 
-  function setData(d) {
+  // A.server = הנתונים האחרונים שהגיעו מהשרת. A.d = מה שמוצג: נתוני השרת + שינויים שעוד בדרך.
+  // כך שינוי מופיע מיד, ולא "קופץ אחורה" כשמגיעה מהשרת תשובה ישנה יותר.
+  const pendingOps = [];
+  const clone = x => JSON.parse(JSON.stringify(x));
+
+  function recompute() {
+    const d = clone(A.server);
+    pendingOps.forEach(op => { try { op.apply(d); } catch (e) { /* שינוי שכבר לא רלוונטי */ } });
     A.d = d;
     buildIndex();
+  }
+
+  function setData(d) {
+    // תשובה ישנה (שיצאה מהשרת לפני תשובה שכבר הגיעה) לא דורסת נתונים חדשים יותר
+    if (A.server && d.stamp && A.server.stamp && d.stamp < A.server.stamp) return;
+    A.server = d;
+    recompute();
     try { localStorage.setItem(CACHE_KEY, JSON.stringify(d)); } catch (e) { /* אחסון מלא – ממשיכים בלי */ }
   }
+
+  // שינוי "אופטימי": apply(d) משנה את הנתונים המוצגים מיד; השרת מאשר ברקע.
+  // אם השרת דוחה – השינוי נעלם ומופיעה הודעה. onDone(result) רץ אחרי אישור השרת.
+  async function optimistic(action, payload, apply, onDone) {
+    const op = { apply };
+    pendingOps.push(op);
+    recompute();
+    safeRender();
+    saving++;
+    syncState();
+    let r;
+    try {
+      r = await api(action, Object.assign({ withBoot: true }, payload));
+    } catch (e) {
+      r = { ok: false, error: TA.offline };
+    } finally {
+      saving--;
+      syncState();
+    }
+    pendingOps.splice(pendingOps.indexOf(op), 1);
+    if (r.ok && r.data && r.data.boot) {
+      const result = r.data.result;
+      setData(r.data.boot);
+      if (onDone) onDone(result);
+      r = Object.assign({}, r, { data: result });
+    } else {
+      recompute();
+      if (r.code === 'AUTH') { logout(TA.sessionExpired); return r; }
+      toast(r.error || TA.error, true);
+    }
+    safeRender();
+    return r;
+  }
+  const tmpId = () => 'tmp-' + Math.random().toString(36).slice(2, 9);
 
   // לא מציירים מחדש באמצע הקלדה או כשחלון פתוח – כדי לא למחוק מה שמקלידים
   function safeRender() {
@@ -159,6 +207,8 @@
   function logout(msg) {
     A.session = '';
     A.d = null;
+    A.server = null;
+    pendingOps.length = 0;
     try {
       localStorage.removeItem('inv:admin:session');
       localStorage.removeItem(CACHE_KEY);
@@ -198,7 +248,8 @@
   }
 
   const item = id => A.ix.items[id];
-  const isLeaf = id => !A.ix.children[id];
+  // עלה = פריט שאפשר להחזיק ממנו מלאי. תיקייה שנוצרה כתיקייה נשארת תיקייה גם כשהיא ריקה.
+  const isLeaf = id => !A.ix.children[id] && !(A.ix.items[id] || {}).isFolder;
   function inheritedWithSource(id, f) {
     let it = item(id), g = 0;
     while (it && g++ < 50) { if (it[f]) return { value: it[f], from: it }; it = item(it.parentId); }
@@ -389,7 +440,10 @@
     }
     const walk = (pid, depth) => (A.ix.children[pid] || []).map(c => nodeHtml(c, depth) +
       (!isLeaf(c.id) && A.open[c.id] ? walk(c.id, depth + 1) : '')).join('');
-    return walk('', 0) || '<div class="muted small">' + esc(TA.emptyList) + '</div>';
+    // שורש העץ: לחיצה עליו = "שום דבר לא מסומן", ופריט חדש ייווצר בראשי
+    const root = '<div class="node' + (!A.sel ? ' on' : '') + '" data-a="selectNode" data-id="" style="padding-right:6px">' +
+      '<span class="tw"></span><span class="ic">' + ICON.folder + '</span><span>' + esc(TA.allItems) + '</span></div>';
+    return root + (walk('', 1) || '<div class="muted small">' + esc(TA.emptyList) + '</div>');
   }
 
   function nodeHtml(it, depth, flat) {
@@ -1127,7 +1181,7 @@
       A.d.tables.Movements.forEach(m => { if (m.itemId) used[m.itemId] = true; });
       const list = leaves
         ? A.d.tables.Items.filter(i => !i.archived && isLeaf(i.id))
-        : A.d.tables.Items.filter(i => !i.archived && (!isLeaf(i.id) || !used[i.id]) && (excludeIds || []).indexOf(i.id) < 0);
+        : A.d.tables.Items.filter(i => !i.archived && !isTmp(i.id) && (!isLeaf(i.id) || !used[i.id]) && (excludeIds || []).indexOf(i.id) < 0);
       const label = i => pathOf(i.id).map(p => p.name).concat([i.name]).join(' › ');
       const rows = q => {
         const words = norm(q).split(' ').filter(Boolean);
@@ -1265,23 +1319,73 @@
     return isLeaf(it.id) ? it.parentId || '' : it.id;
   }
 
-  async function createNode(parentId, name) {
-    const payload = { entity: 'Items', record: { name, parentId } };
-    let r = await mutate('admin.save', payload, null);
-    if (!r.ok && r.code === 'PARENT_HAS_STOCK') {
-      if (!(await confirmBox(TA.parentHasStock, TA.moveStockYes))) return;
-      r = await mutate('admin.save', Object.assign(payload, { options: { moveStockToChild: true } }), null);
-    }
-    if (r.ok) {
-      if (parentId) A.open[parentId] = true;
-      A.sel = r.data.id;
-      toast(TA.saved);
-      render();
-    }
+  // ---------- בדיקות מקומיות (כדי שטעות תופיע מיד ולא אחרי כמה שניות מהשרת) ----------
+  const sameName = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+  function dupError(entity, name, id, parentId) {
+    const rows = entity === 'Items'
+      ? (A.ix.children[parentId || ''] || [])
+      : A.d.tables[entity].filter(r => !r.archived);
+    return rows.some(r => r.id !== id && sameName(r.name, name)) ? fmt(TA.duplicateName, { name: String(name).trim() }) : '';
+  }
+  const hasStock = id => Object.keys(A.d.stock[id] || {}).some(h => A.d.stock[id][h] > 0);
+  const numOrNull = v => (v === '' || v === null || v === undefined ? null : Number(v));
+
+  // פריט חדש: מופיע מיד בעץ (עם מזהה זמני), ומקבל מזהה אמיתי כשהשרת מאשר
+  async function createNode(parentId, name, isFolder) {
+    const err = dupError('Items', name, null, parentId);
+    if (err) return toast(err, true);
+    const moveStock = parentId && isLeaf(parentId) && hasStock(parentId);
+    if (moveStock && !(await confirmBox(TA.parentHasStock, TA.moveStockYes))) return;
+    const tmp = tmpId();
+    if (parentId) A.open[parentId] = true;
+    A.sel = tmp;
+    const record = { name, parentId, isFolder: !!isFolder };
+    optimistic('admin.save', { entity: 'Items', record, options: { moveStockToChild: !!moveStock } }, d => {
+      d.tables.Items.push(Object.assign({ id: tmp, kind: '', unitId: '', archived: false }, record));
+      if (moveStock) { d.stock[tmp] = d.stock[parentId]; delete d.stock[parentId]; }
+    }, res => { if (A.sel === tmp) A.sel = res.id; });
+  }
+
+  // חלון "פריט חדש / תיקייה חדשה": שם + איפה ליצור (ברירת מחדל: התיקייה המסומנת)
+  function folderChoices(excludeIds) {
+    const used = {};
+    A.d.tables.Movements.forEach(m => { if (m.itemId) used[m.itemId] = true; });
+    const label = i => pathOf(i.id).map(p => p.name).concat([i.name]).join(' › ');
+    return [{ id: '', l: TA.root }].concat(A.d.tables.Items
+      .filter(i => !i.archived && !isTmp(i.id) && (!isLeaf(i.id) || !used[i.id]) && (excludeIds || []).indexOf(i.id) < 0)
+      .map(i => ({ id: i.id, l: label(i) }))
+      .sort((a, b) => a.l.localeCompare(b.l, 'he', { numeric: true })));
+  }
+  function createBox(title, folderId) {
+    if (isTmp(folderId)) folderId = '';
+    return new Promise(resolve => {
+      const bg = modal('<h3>' + esc(title) + '</h3><div class="form" style="grid-template-columns:110px 1fr">' +
+        '<label>' + esc(TA.fName) + '</label><input class="in" id="pv">' +
+        '<label>' + esc(TA.createIn) + '</label><select class="in" id="pf">' +
+        folderChoices().map(f => '<option value="' + f.id + '"' + (f.id === folderId ? ' selected' : '') + '>' + esc(f.l) + '</option>').join('') +
+        '</select></div><div class="foot"><button class="btn p" data-r="1">' + esc(TA.create) + '</button><button class="btn" data-r="0">' + esc(TA.cancel) + '</button></div>');
+      const done = ok => {
+        const name = document.getElementById('pv').value.trim();
+        const parentId = document.getElementById('pf').value;
+        closeModal();
+        resolve(ok && name ? { name, parentId } : null);
+      };
+      bg.addEventListener('click', e => { const b = e.target.closest('[data-r]'); if (b) done(b.dataset.r === '1'); });
+      bg.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'pv') done(true); if (e.key === 'Escape') done(false); });
+      document.getElementById('pv').focus();
+    });
+  }
+
+  // רשומה שעוד לא אושרה בשרת (מזהה זמני) – אי אפשר לפעול עליה עד שהשמירה מסתיימת
+  const isTmp = id => String(id || '').indexOf('tmp-') === 0;
+  function waitTmp(id) {
+    if (!isTmp(id)) return false;
+    toast(TA.stillSaving);
+    return true;
   }
 
   const H = {};
-  H.menu = () => document.getElementById('side').classList.toggle('open');
+  H.menu =() => document.getElementById('side').classList.toggle('open');
   // מעבר בין חלקים גם מושך את הנתונים העדכניים מהשטח
   H.section = el => { A.section = el.dataset.s; render(); window.scrollTo(0, 0); load(); };
   H.logout = () => logout('');
@@ -1296,43 +1400,83 @@
     render();
   };
   H.newNode = async el => {
-    const name = await promptBox(el.dataset.folder ? TA.newFolder : TA.newItem, '');
-    if (name) createNode(currentFolder(), name);
+    const r = await createBox(el.dataset.folder ? TA.newFolder : TA.newItem, currentFolder());
+    if (r) createNode(r.parentId, r.name, !!el.dataset.folder);
   };
   H.addChild = async () => {
-    const name = await promptBox(TA.newItem, '');
-    if (name) createNode(A.sel, name);
+    if (waitTmp(A.sel)) return;
+    const r = await createBox(TA.newItem, A.sel);
+    if (r) createNode(r.parentId, r.name);
   };
   H.quickAdd = el => quickAddBox(currentFolder(), !!el.dataset.paste);
   H.saveItem = () => {
+    if (waitTmp(A.sel)) return;
     const v = id => { const el = document.getElementById(id); return el ? el.value.trim() : undefined; };
+    const it = item(A.sel);
     const leaf = isLeaf(A.sel);
     const rec = { id: A.sel, name: v('f_name'), kind: v('f_kind'), unitId: v('f_unit') };
     if (leaf) Object.assign(rec, {
       buyUnitName: v('f_buyName'), buyUnitQty: v('f_buyQty'), minQty: v('f_min'), value: v('f_value'),
       aliases: v('f_aliases').split(/[,;]/).map(s => s.trim()).filter(Boolean).join(';'),
     });
-    mutate('admin.save', { entity: 'Items', record: rec });
+    if (!rec.name) return toast(TA.fName, true);
+    const err = dupError('Items', rec.name, rec.id, it.parentId);
+    if (err) return toast(err, true);
+    document.activeElement && document.activeElement.blur();
+    optimistic('admin.save', { entity: 'Items', record: rec }, d => {
+      const x = d.tables.Items.find(i => i.id === rec.id);
+      Object.assign(x, rec, leaf ? { buyUnitQty: numOrNull(rec.buyUnitQty), minQty: numOrNull(rec.minQty), value: numOrNull(rec.value) } : {});
+    });
+    toast(TA.saved);
   };
-  H.duplicateItem = async () => {
-    const r = await mutate('admin.items.duplicate', { id: A.sel });
-    if (r.ok) { A.sel = r.data.id; render(); }
+  H.duplicateItem = () => {
+    if (waitTmp(A.sel)) return;
+    const it = item(A.sel);
+    const tmp = tmpId();
+    const names = (A.ix.children[it.parentId || ''] || []).map(c => c.name);
+    let name = it.name + ' (עותק)', n = 1;
+    while (names.indexOf(name) >= 0) name = it.name + ' (עותק ' + ++n + ')';
+    A.sel = tmp;
+    optimistic('admin.items.duplicate', { id: it.id }, d => {
+      const src = d.tables.Items.find(i => i.id === it.id);
+      d.tables.Items.push(Object.assign({}, src, { id: tmp, name }));
+    }, res => { if (A.sel === tmp) A.sel = res.id; });
   };
   H.moveItem = async () => {
-    const target = await pickBox(TA.chooseFolder, false, descendants(A.sel));
+    const id = A.sel;
+    if (waitTmp(id)) return;
+    const target = await pickBox(TA.chooseFolder, false, descendants(id));
     if (target === null) return;
-    const r = await mutate('admin.save', { entity: 'Items', record: { id: A.sel, parentId: target } });
-    if (r.ok && target) { A.open[target] = true; render(); }
+    const err = dupError('Items', item(id).name, id, target);
+    if (err) return toast(err, true);
+    if (target) A.open[target] = true;
+    optimistic('admin.save', { entity: 'Items', record: { id, parentId: target } }, d => {
+      d.tables.Items.find(i => i.id === id).parentId = target;
+    });
   };
   H.archiveItem = async () => {
+    if (waitTmp(A.sel)) return;
     const it = item(A.sel);
+    if (descendants(it.id).some(hasStock)) return toast(TA.folderHasStock, true);
     if (!(await confirmBox(fmt(TA.confirmArchive, { name: it.name }), TA.remove, true))) return;
-    const r = await mutate('admin.archive', { entity: 'Items', id: it.id }, fmt(TA.archived, { name: it.name }));
-    if (r.ok) { A.sel = it.parentId || ''; render(); }
+    const ids = descendants(it.id);
+    A.sel = it.parentId || '';
+    optimistic('admin.archive', { entity: 'Items', id: it.id }, d => {
+      d.tables.Items.forEach(i => { if (ids.indexOf(i.id) >= 0) i.archived = true; });
+    });
+    toast(fmt(TA.archived, { name: it.name }));
   };
   H.unknownLink = async el => {
+    const id = el.dataset.id;
     const itemId = await pickBox(TA.unknownPick, true);
-    if (itemId) mutate('admin.unknown.resolve', { id: el.dataset.id, itemId });
+    if (!itemId) return;
+    optimistic('admin.unknown.resolve', { id, itemId }, d => {
+      const u = d.tables.UnknownItems.find(x => x.id === id);
+      u.status = 'linked';
+      u.itemId = itemId;
+      const m = d.tables.Movements.find(x => x.id === u.movementId);
+      if (m) m.itemId = itemId;
+    });
   };
   H.unknownCreate = async el => {
     const u = A.d.tables.UnknownItems.find(x => x.id === el.dataset.id);
@@ -1366,7 +1510,10 @@
       { k: 'place', label: TA.setQtyPlace, type: 'select', options: places },
       { k: 'counted', label: TA.setQtyCount },
     ], rec, Object.assign(
-      v => mutate('admin.movement.add', { movement: { type: 'count', itemId: id, countedQty: Number(v.counted), from: v.place } }),
+      v => optimistic('admin.movement.add', { movement: { type: 'count', itemId: id, countedQty: Number(v.counted), from: v.place } }, d => {
+        d.stock[id] = d.stock[id] || {};
+        d.stock[id][v.place] = Number(v.counted);
+      }),
       { validate: v => (v.counted === '' || !Number.isInteger(Number(v.counted)) || Number(v.counted) < 0 ? TA.qtyMissing : '') }));
     const m = document.getElementById('modal');
     if (m) m.querySelector('.form').insertAdjacentHTML('afterend', '<div class="hint">' + esc(TA.setQtyHint) + '</div>');
@@ -1472,25 +1619,44 @@
     const tr = el.closest('tr');
     const price = tr.querySelector('[data-pp]').value;
     if (price === '') return toast(TA.cUnitPrice, true);
-    mutate('admin.purchase.setPrice', {
-      movementId: tr.dataset.mv, unitPrice: Number(price), includesVat: tr.querySelector('[data-pv]').checked,
-      supplierId: tr.querySelector('[data-ps]').value,
+    const mv = tr.dataset.mv;
+    const supplierId = tr.querySelector('[data-ps]').value;
+    const inc = tr.querySelector('[data-pv]').checked;
+    optimistic('admin.purchase.setPrice', { movementId: mv, unitPrice: Number(price), includesVat: inc, supplierId }, d => {
+      const m = d.tables.Movements.find(x => x.id === mv);
+      m.unitPrice = inc ? Number(price) / (1 + (Number(d.settings.vatRate) || 0) / 100) : Number(price);
+      if (supplierId) m.supplierId = supplierId;
     });
   };
 
   // ---- פרויקטים ----
   H.openProject = el => { A.projectId = el.dataset.id; render(); };
   const PROJECT_FIELDS = [{ k: 'name', label: TA.fName }, { k: 'note', label: TA.fNote }];
-  H.newProject = () => formBox(TA.newProject, PROJECT_FIELDS, {}, async v => {
-    const r = await mutate('admin.save', { entity: 'Projects', record: v });
-    if (r.ok) { A.projectId = r.data.id; safeRender(); }
-    return r;
-  });
+  H.newProject = () => formBox(TA.newProject, PROJECT_FIELDS, {}, Object.assign(v => {
+    const tmp = tmpId();
+    A.projectId = tmp;
+    return optimistic('admin.save', { entity: 'Projects', record: v }, d => {
+      d.tables.Projects.push(Object.assign({ id: tmp, status: 'open', openedAt: new Date().toISOString(), archived: false }, v));
+    }, res => { if (A.projectId === tmp) A.projectId = res.id; });
+  }, { validate: v => (!v.name.trim() ? TA.fName : dupError('Projects', v.name)) }));
   H.editProject = () => {
     const p = A.ix.projects[A.projectId];
     formBox(TA.edit + ' · ' + p.name, PROJECT_FIELDS, p, v => saveQuiet('Projects', Object.assign({ id: p.id }, v)));
   };
-  H.unassign = el => mutate('admin.container.assign', { containerId: el.dataset.id, projectId: A.projectId, assign: false });
+  function assignContainer(containerId, projectId, assign) {
+    optimistic('admin.container.assign', { containerId, projectId, assign }, d => {
+      if (assign) d.tables.ContainerProjects.push({ id: tmpId(), containerId, projectId, from: new Date().toISOString(), to: '' });
+      else d.tables.ContainerProjects.forEach(c => { if (c.containerId === containerId && c.projectId === projectId && !c.to) c.to = new Date().toISOString(); });
+    });
+  }
+  function setProjectStatus(id, status) {
+    optimistic('admin.project.status', { id, status }, d => {
+      const p = d.tables.Projects.find(x => x.id === id);
+      p.status = status;
+      p.closedAt = status === 'closed' ? new Date().toISOString() : '';
+    });
+  }
+  H.unassign = el => assignContainer(el.dataset.id, A.projectId, false);
   H.closeProject = async () => {
     const p = A.ix.projects[A.projectId];
     const r = await api('admin.project.closeCheck', { id: p.id });
@@ -1505,10 +1671,10 @@
       const b = e.target.closest('[data-r]');
       if (!b) return;
       closeModal();
-      if (b.dataset.r === '1') mutate('admin.project.status', { id: p.id, status: 'closed' }, TA.projectClosed);
+      if (b.dataset.r === '1') { setProjectStatus(p.id, 'closed'); toast(TA.projectClosed); }
     });
   };
-  H.reopenProject = () => mutate('admin.project.status', { id: A.projectId, status: 'open' });
+  H.reopenProject = () => setProjectStatus(A.projectId, 'open');
 
   // ---- דוחות ----
   H.report = el => { A.report = el.dataset.v; render(); };
@@ -1530,15 +1696,31 @@
 
   // ---- ארכיון ----
   H.archTab = el => { A.archTab = el.dataset.v; render(); };
-  H.archRestore = el => mutate('admin.restore', { entity: el.dataset.e, id: el.dataset.id });
+  function restore(entity, id) {
+    optimistic('admin.restore', { entity, id }, d => {
+      const r = d.tables[entity].find(x => x.id === id);
+      r.archived = false;
+      if (entity === 'Items') {
+        let p = d.tables.Items.find(x => x.id === r.parentId);
+        while (p) { p.archived = false; const pid = p.parentId; p = d.tables.Items.find(x => x.id === pid); }
+      }
+    });
+  }
+  H.archRestore = el => restore(el.dataset.e, el.dataset.id);
 
   // ---- הגדרות ----
   H.saveSettings = () => {
     const values = {};
     ['vatRate', 'lateDays', 'stalePriceMonths', 'digestHour', 'companyName'].forEach(k => { values[k] = document.getElementById('s_' + k).value; });
-    mutate('admin.settings.save', { values });
+    document.activeElement && document.activeElement.blur();
+    optimistic('admin.settings.save', { values }, d => { Object.assign(d.settings, values); });
+    toast(TA.saved);
   };
-  H.toggleAlerts = el => mutate('admin.save', { entity: 'People', record: { id: el.dataset.id, alerts: el.checked } });
+  H.toggleAlerts = el => {
+    const id = el.dataset.id;
+    const alerts = el.checked;
+    optimistic('admin.save', { entity: 'People', record: { id, alerts } }, d => { d.tables.People.find(p => p.id === id).alerts = alerts; });
+  };
   H.addAdmin = () => formBox(TA.sAddAdmin, [{ k: 'name', label: TA.fName }, { k: 'email', label: TA.fEmail }, { k: 'alerts', label: TA.fAlerts, type: 'check' }],
     { alerts: true }, v => saveQuiet('People', Object.assign({ role: 'admin' }, v)));
   H.backupNow = async () => {
@@ -1552,25 +1734,39 @@
     const ent = A.listTab;
     const defaults = { People: { role: 'field', alerts: false }, Locations: { type: 'container' } }[ent] || {};
     formBox(TA.add + ' · ' + TA.listTabs[ent], LIST_FIELDS[ent], defaults,
-      values => saveQuiet(ent, values));
+      withNameCheck(ent, null, values => saveQuiet(ent, values)));
   };
   H.listEdit = async el => {
+    if (waitTmp(el.dataset.id)) return;
     const ent = A.listTab;
     const rec = A.d.tables[ent].find(x => x.id === el.dataset.id);
     formBox(TA.edit + ' · ' + rec.name, LIST_FIELDS[ent], rec,
-      values => saveQuiet(ent, Object.assign({ id: rec.id }, values)));
+      withNameCheck(ent, rec.id, values => saveQuiet(ent, Object.assign({ id: rec.id }, values))));
   };
-  // שמירה מחלון טופס – רצה ברקע; שגיאה (למשל שם כפול) מופיעה כהודעה קופצת
+  // בדיקת שם חסר/כפול לפני שהחלון נסגר
+  function withNameCheck(entity, id, fn) {
+    return Object.assign(fn, { validate: v => (v.name !== undefined && !String(v.name).trim() ? TA.fName : dupError(entity, v.name || '', id)) });
+  }
+  // שמירה מחלון טופס – מופיעה מיד ברשימה, והשרת מאשר ברקע
   function saveQuiet(entity, record) {
-    return mutate('admin.save', { entity, record });
+    const tmp = record.id ? null : tmpId();
+    return optimistic('admin.save', { entity, record }, d => {
+      if (record.id) Object.assign(d.tables[entity].find(x => x.id === record.id), record);
+      else d.tables[entity].push(Object.assign({ id: tmp, archived: false }, record));
+    });
   }
   H.listArchive = async el => {
+    if (waitTmp(el.dataset.id)) return;
     const ent = A.listTab;
     const rec = A.d.tables[ent].find(x => x.id === el.dataset.id);
+    if (ent === 'People' && Object.keys(A.d.stock).some(i => (A.d.stock[i]['P:' + rec.id] || 0) > 0)) {
+      return toast(fmt(TA.personHasTools, { name: rec.name }), true);
+    }
     if (!(await confirmBox(fmt(TA.confirmArchive, { name: rec.name }), TA.remove, true))) return;
-    mutate('admin.archive', { entity: ent, id: rec.id }, fmt(TA.archived, { name: rec.name }));
+    optimistic('admin.archive', { entity: ent, id: rec.id }, d => { d.tables[ent].find(x => x.id === rec.id).archived = true; });
+    toast(fmt(TA.archived, { name: rec.name }));
   };
-  H.listRestore = el => mutate('admin.restore', { entity: A.listTab, id: el.dataset.id });
+  H.listRestore = el => restore(A.listTab, el.dataset.id);
   H.copyLink = async el => {
     const p = A.ix.people[el.dataset.id];
     const url = fieldUrl(p.token);
@@ -1633,7 +1829,7 @@
       A.basket.sup[t.dataset.bs] = t.value;
       render();
     } else if (t.id === 'assignSel' && t.value) {
-      mutate('admin.container.assign', { containerId: t.value, projectId: A.projectId, assign: true });
+      assignContainer(t.value, A.projectId, true);
     } else if (t.id === 'rFrom' || t.id === 'rTo') {
       A[t.id === 'rFrom' ? 'rangeFrom' : 'rangeTo'] = t.value;
       render();
@@ -1660,7 +1856,7 @@
     if (A.session) {
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
-        if (cached && cached.tables) { A.d = cached; buildIndex(); }
+        if (cached && cached.tables) { A.server = cached; recompute(); }
       } catch (e) { /* אין נתונים שמורים */ }
     }
     render();

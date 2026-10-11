@@ -16,7 +16,7 @@ const CONFIG = {
 // עמודות לכל גיליון. סיומת :n = מספר, :b = כן/לא. כל השאר טקסט.
 const SCHEMA = {
   Items: ['id', 'parentId', 'name', 'kind', 'unitId', 'buyUnitName', 'buyUnitQty:n', 'minQty:n',
-    'aliases', 'imageId', 'value:n', 'sort:n', 'archived:b', 'createdAt', 'updatedAt'],
+    'aliases', 'imageId', 'value:n', 'sort:n', 'archived:b', 'createdAt', 'updatedAt', 'isFolder:b'],
   Units: ['id', 'name', 'archived:b'],
   Locations: ['id', 'name', 'type', 'address', 'archived:b'],
   ContainerProjects: ['id', 'containerId', 'projectId', 'from', 'to'],
@@ -300,7 +300,8 @@ const Model = (() => {
 
   function childrenOf(id) { return index_().children[id || ''] || []; }
 
-  function isLeaf(id) { return childrenOf(id).length === 0; }
+  // עלה = פריט שאפשר להחזיק ממנו מלאי: בלי תתי-סוגים, ולא נוצר כתיקייה (תיקייה ריקה היא עדיין תיקייה)
+  function isLeaf(id) { return childrenOf(id).length === 0 && !(item(id) || {}).isFolder; }
 
   // ערך שעובר בירושה מלמעלה (kind, unitId)
   function inherited(id, field) {
@@ -843,7 +844,7 @@ const EDITABLE = {
   People: ['name', 'role', 'email', 'alerts'],
   Suppliers: ['name', 'phone', 'contact', 'note'],
   Projects: ['name', 'note'],
-  Items: ['parentId', 'name', 'kind', 'unitId', 'buyUnitName', 'buyUnitQty', 'minQty', 'aliases', 'imageId', 'value', 'sort'],
+  Items: ['parentId', 'name', 'kind', 'unitId', 'buyUnitName', 'buyUnitQty', 'minQty', 'aliases', 'imageId', 'value', 'sort', 'isFolder'],
 };
 
 const ENTITY_NAMES = {
@@ -1039,7 +1040,7 @@ function quickAdd_(parentId, rows, actor) {
     let pid = base || '';
     parts.forEach(part => {
       const found = Model.childrenOf(pid).find(c => c.name.trim() === part);
-      pid = found ? found.id : saveRecord_('Items', { parentId: pid, name: part }, actor).id;
+      pid = found ? found.id : saveRecord_('Items', { parentId: pid, name: part, isFolder: true }, actor).id;
     });
     return pid;
   };
@@ -1277,7 +1278,7 @@ function fieldBootstrap_(me) {
   const received = Model.receivedByLine();
   return {
     me: { id: me.id, name: me.name, role: me.role },
-    items: pick(Db.all('Items'), ['id', 'parentId', 'name', 'kind', 'unitId', 'buyUnitName', 'buyUnitQty', 'aliases', 'imageId', 'sort']),
+    items: pick(Db.all('Items'), ['id', 'parentId', 'name', 'kind', 'unitId', 'buyUnitName', 'buyUnitQty', 'aliases', 'imageId', 'sort', 'isFolder']),
     units: pick(Db.all('Units'), ['id', 'name']),
     locations: pick(Db.all('Locations'), ['id', 'name', 'type']),
     people: pick(Db.all('People'), ['id', 'name']),
@@ -1325,6 +1326,7 @@ function adminBootstrap_(me) {
     receivedByLine: Model.receivedByLine(),
     settings: Db.settings(),
     serverTime: now_(),
+    stamp: Date.now(), // לסדר תשובות בדפדפן: תשובה ישנה לא דורסת חדשה
   };
 }
 
