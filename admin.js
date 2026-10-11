@@ -523,7 +523,8 @@
       const low = it.minQty !== null && it.minQty !== '' && w < it.minQty;
       h += '<h2>' + esc(TA.inStockTitle) + '</h2><div class="box"><div style="margin-bottom:8px"><b>' + esc(fmt(TA.warehouseTotal, { n: num(w) + ' ' + unitName(it.id) })) + '</b>' +
         (low ? ' <span class="tag" style="background:var(--danger-bg);color:var(--danger)">' + esc(TA.belowMin) + '</span>' : '') + '</div>' +
-        '<div class="stockrows">' + holders.map(k => '<div><span>' + esc(holderName(k)) + '</span><span>' + num(row[k]) + '</span></div>').join('') + '</div></div>';
+        '<div class="stockrows">' + holders.map(k => '<div><span>' + esc(holderName(k)) + '</span><span>' + num(row[k]) + '</span></div>').join('') + '</div>' +
+        '<div class="btns" style="margin-top:10px"><button class="btn sm" data-a="setQty" data-id="' + it.id + '">' + esc(TA.setQty) + '</button><button class="btn sm" data-a="moveStock" data-id="' + it.id + '">' + esc(TA.moveStock) + '</button></div></div>';
     } else {
       h += '<div class="box muted" style="margin-top:12px">' + esc(fmt(TA.folderInfo, { n: descendants(it.id).filter(x => x !== it.id && isLeaf(x)).length })) + '</div>';
     }
@@ -630,7 +631,7 @@
         '<span class="' + (low ? 'lowtxt' : '') + '">' + (min !== null ? esc(fmt(TA.qtyOfMin, { qty: num(w), min: num(min), unit: unitLabel(it.id) })) : num(w) + ' ' + esc(unitLabel(it.id))) +
         (onOrder(it.id) ? ' <span class="tag g">' + esc(TA.cOnOrder) + ' ' + num(onOrder(it.id)) + '</span>' : '') + '</span></div>' + bar +
         (open ? '<div class="sexp">' + Object.keys(row).filter(k => row[k]).map(k => '<span>' + esc(holderName(k)) + ': ' + num(row[k]) + '</span>').join('') +
-          '<button class="btn sm" data-a="setQty" data-id="' + it.id + '">' + esc(TA.setQty) + '</button></div>' : '') + '</div>';
+          '<button class="btn sm" data-a="setQty" data-id="' + it.id + '">' + esc(TA.setQty) + '</button><button class="btn sm" data-a="moveStock" data-id="' + it.id + '">' + esc(TA.moveStock) + '</button></div>' : '') + '</div>';
     }).join('') + '</div>';
   }
 
@@ -667,7 +668,7 @@
         const it = item(id);
         const w = warehouseQty(id);
         return '<tr' + (hasMin(it) && w < it.minQty ? ' class="lowrow"' : '') + '><td>' + esc(displayName(id)) + '</td><td><b>' + num(A.d.stock[id][h]) + '</b> ' + esc(unitLabel(id)) + '</td><td>' + num(w) +
-          '</td><td>' + (hasMin(it) ? num(it.minQty) : '') + '</td><td><button class="btn sm" data-a="setQty" data-id="' + id + '" data-place="' + h + '">' + esc(TA.setQty) + '</button></td></tr>';
+          '</td><td>' + (hasMin(it) ? num(it.minQty) : '') + '</td><td><div class="btns"><button class="btn sm" data-a="setQty" data-id="' + id + '" data-place="' + h + '">' + esc(TA.setQty) + '</button><button class="btn sm" data-a="moveStock" data-id="' + id + '" data-from="' + h + '">' + esc(TA.moveStock) + '</button></div></td></tr>';
       }).join('') : '<tr><td colspan="5" class="muted">' + esc(TA.nothing) + '</td></tr>') + '</table></div>';
   }
 
@@ -684,7 +685,7 @@
       (pulls.length ? Object.keys(byProject).map(prj => '<h2 style="margin:10px 0 4px;font-size:15px">' + esc((A.ix.projects[prj] || {}).name) + '</h2>' +
         byProject[prj].map(x => '<div class="kv"><span>' + esc(displayName(x.itemId)) + '</span><span>' + num(x.qty) + ' ' + esc(unitLabel(x.itemId)) + '</span></div>').join('')).join('')
         : '<div class="muted">' + esc(TA.nothing) + '</div>') + '</div>' +
-      '<div class="box"><b>' + esc(TA.personTools) + '</b>' + (tools.length ? tools.map(id => '<div class="kv"><span>' + esc(displayName(id)) + '</span><span>' + num(A.d.stock[id]['P:' + pid]) + '</span></div>').join('')
+      '<div class="box"><b>' + esc(TA.personTools) + '</b>' + (tools.length ? tools.map(id => '<div class="kv"><span>' + esc(displayName(id)) + '</span><span class="inline">' + num(A.d.stock[id]['P:' + pid]) + ' <button class="btn sm" data-a="moveStock" data-id="' + id + '" data-from="P:' + pid + '">' + esc(TA.moveStock) + '</button></span></div>').join('')
         : '<div class="muted">' + esc(TA.nothing) + '</div>') + '</div></div>';
   }
 
@@ -1659,6 +1660,42 @@
   H.stockToggle = el => {
     A.stockOpen[el.dataset.id] = !A.stockOpen[el.dataset.id];
     document.getElementById('stockBody').innerHTML = stockBody();
+  };
+  // העברה ממקום/אדם למקום/אדם – כמו "להעביר" בטלפון, רק מהמשרד
+  H.moveStock = el => {
+    const id = el.dataset.id;
+    const row = A.d.stock[id] || {};
+    const unit = unitName(id);
+    const from = Object.keys(row).filter(h => row[h] > 0 && (h.indexOf('P:') === 0 || A.ix.locs[h.slice(2)]))
+      .map(h => [h, holderName(h) + ' · ' + num(row[h]) + (unit ? ' ' + unit : '')]);
+    if (!from.length) return toast(TA.nothingToMove, true);
+    const to = A.d.tables.Locations.filter(l => !l.archived).map(l => ['L:' + l.id, l.name])
+      .concat(A.d.tables.People.filter(p => !p.archived).map(p => ['P:' + p.id, p.name]));
+    const hub = A.d.tables.Locations.find(l => l.type === 'hub' && !l.archived);
+    const rec = { from: el.dataset.from && row[el.dataset.from] > 0 ? el.dataset.from : from[0][0], to: hub ? 'L:' + hub.id : to[0][0], qty: '' };
+    const kindOfHolder = h => (h.indexOf('L:') === 0 && (A.ix.locs[h.slice(2)] || {}).type === 'repair' ? 'R' : h[0]);
+    formBox(fmt(TA.moveTitle, { item: displayName(id) }), [
+      { k: 'from', label: TA.moveFrom, type: 'select', options: from },
+      { k: 'to', label: TA.moveTo, type: 'select', options: to },
+      { k: 'qty', label: TA.cQty + (unit ? ' (' + unit + ')' : '') },
+    ], rec, Object.assign(v => {
+      const qty = Number(v.qty);
+      // לתיקון / מתיקון זה סוג תנועה אחר בשרת
+      const type = kindOfHolder(v.to) === 'R' ? 'repair_out' : kindOfHolder(v.from) === 'R' ? 'repair_in' : 'transfer';
+      return optimistic('admin.movement.add', { movement: { type, itemId: id, qty, from: v.from, to: v.to } }, d => {
+        d.stock[id] = d.stock[id] || {};
+        d.stock[id][v.from] = (d.stock[id][v.from] || 0) - qty;
+        d.stock[id][v.to] = (d.stock[id][v.to] || 0) + qty;
+      });
+    }, {
+      validate: v => {
+        const qty = Number(v.qty);
+        if (!Number.isInteger(qty) || qty <= 0) return TA.qtyMissing;
+        if (v.from === v.to) return TA.sameFromTo;
+        if (qty > (row[v.from] || 0)) return fmt(TA.onlyThere, { n: num(row[v.from] || 0) });
+        return '';
+      },
+    }));
   };
   H.setQty = el => {
     const id = el.dataset.id;
