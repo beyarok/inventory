@@ -53,6 +53,7 @@ window.T = {
     undo: 'בטל',
     undone: 'הדיווח בוטל',
     offline: 'אין קליטה – {n} דיווחים מחכים לשליחה',
+    sending: 'שולח ברקע ({n})…',
     flushed: 'הדיווחים נשלחו',
     failed: 'לא נרשם: {item} – {error}',
 

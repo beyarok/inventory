@@ -48,6 +48,7 @@ input { font: inherit; }
 .banner.ok { background: var(--ok-bg); color: var(--ok); }
 .banner.warn { background: var(--warn-bg); color: var(--warn); }
 .banner.err { background: var(--danger-bg); color: var(--danger); }
+.banner.info { background: var(--beige); color: var(--muted); font-size: 13px; padding: 6px 12px; }
 .banner .grow { flex: 1; }
 .banner button { text-decoration: underline; font-weight: 600; }
 

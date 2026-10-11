@@ -1204,7 +1204,15 @@ function json_(obj) {
 
 const FIELD_ACTIONS = {
   'field.bootstrap': (req, me) => fieldBootstrap_(me),
-  'field.submit': (req, me) => withLock_(() => submitBatch_(req.movements || [], me)),
+  'field.submit': (req, me) => {
+    const out = withLock_(() => submitBatch_(req.movements || [], me));
+    // withBoot: מחזירים גם את כל הנתונים המעודכנים – הטלפון לא צריך פנייה נוספת לרענון
+    if (req.withBoot) {
+      Model.reset();
+      out.boot = fieldBootstrap_(me);
+    }
+    return out;
+  },
   'field.undo': (req, me) => withLock_(() => reverseMovement_(req.movementId, me, false)),
 };
 

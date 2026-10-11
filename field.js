@@ -55,7 +55,15 @@
     const req = Object.assign({ action, token: S.token }, payload || {});
     if (window.DEMO_HANDLE) return window.DEMO_HANDLE(req);
     const res = await fetch(window.APP_CONFIG.apiUrl, { method: 'POST', body: JSON.stringify(req) });
-    return res.json();
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      // השרת של גוגל החזיר דף שגיאה (עומס רגעי) – זו לא בעיית קליטה, פשוט מנסים שוב
+      const err = new Error('server');
+      err.server = true;
+      throw err;
+    }
   }
 
   // ---------- אינדקס הנתונים ----------
@@ -164,12 +172,13 @@
       : '<span class="leaf">' + ICON.leaf + '</span>') +
     '<h1>' + esc(title) + '</h1></header>';
 
+  // "אין קליטה" רק כשהטלפון באמת בלי רשת. אחרת – הודעה שקטה שהדיווחים בדרך.
   function banners() {
-    let h = '';
-    if (S.queue.length && S.offline) {
-      h += '<div class="banner warn">' + ICON.cloud + '<span class="grow">' + esc(fmt(TX.offline, { n: S.queue.length })) + '</span></div>';
+    if (!S.queue.length) return '';
+    if (navigator.onLine === false) {
+      return '<div class="banner warn">' + ICON.cloud + '<span class="grow">' + esc(fmt(TX.offline, { n: S.queue.length })) + '</span></div>';
     }
-    return h;
+    return '<div class="banner info">' + ICON.cloud + '<span class="grow">' + esc(fmt(TX.sending, { n: S.queue.length })) + '</span></div>';
   }
 
   function itemRow(id, opts) {
@@ -821,18 +830,39 @@
     }
   }
 
+  // ניסיון חוזר מהיר: 2, 4, 8, 16, 30 שניות. השרת של גוגל לפעמים מתעכב או נקטע – זה לא אומר שאין קליטה.
+  let retryMs = 0;
+  let retryTimer = null;
+  function scheduleRetry() {
+    retryMs = Math.min(retryMs ? retryMs * 2 : 2000, 30000);
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(flush, retryMs);
+  }
+
+  // נתונים טריים מהשרת + מה שעוד בתור מעליהם
+  function applyBoot(boot) {
+    S.data = boot;
+    S.queue.forEach(applyLocal);
+    buildIndex();
+    store.set('boot', S.data);
+    if (['finish', 'receiveOrder', 'unknown', 'pick'].indexOf(cur().v) < 0) render();
+  }
+
   async function flush() {
     if (S.flushing || !S.queue.length) return;
     S.flushing = true;
+    clearTimeout(retryTimer);
     const batch = S.queue.slice(0, 50);
-    const wasOffline = S.offline;
+    const wasRetrying = retryMs > 0;
+    let ok = false;
     try {
-      const r = await api('field.submit', { movements: batch });
-      S.offline = false;
+      const r = await api('field.submit', { movements: batch, withBoot: true });
       if (!r.ok) {
         if (r.code === 'AUTH') return fatal(TX.badLink);
-        return;
+        return scheduleRetry();
       }
+      ok = true;
+      retryMs = 0;
       const done = {};
       r.data.results.forEach(res => {
         done[res.clientKey] = true;
@@ -844,14 +874,15 @@
       });
       S.queue = S.queue.filter(m => !done[m.clientKey]);
       store.set('queue', S.queue);
-      if (wasOffline && !S.toast) toast('ok', TX.flushed);
-      await refresh();
+      if (wasRetrying && !S.toast) toast('ok', TX.flushed);
+      if (r.data.boot) applyBoot(r.data.boot);
+      else refresh();
     } catch (e) {
-      S.offline = true;
-      if (cur().v === 'home') render();
+      scheduleRetry();
     } finally {
       S.flushing = false;
-      if (S.queue.length && !S.offline) setTimeout(flush, 500);
+      if (cur().v === 'home') render();
+      if (ok && S.queue.length) setTimeout(flush, 300);
     }
   }
 
@@ -861,23 +892,19 @@
   }
 
   // מושך את הנתונים העדכניים, ומחיל מעליהם מה שעוד מחכה בתור
+  // מושך את הנתונים העדכניים, ומחיל מעליהם מה שעוד מחכה בתור. כישלון = שקט; ננסה בפעם הבאה.
+  let lastRefresh = 0;
   async function refresh() {
+    lastRefresh = Date.now();
     try {
       const r = await api('field.bootstrap');
       if (!r.ok) {
         if (r.code === 'AUTH') { store.set('boot', null); fatal(TX.badLink); }
         return;
       }
-      S.offline = false;
-      S.data = r.data;
-      S.queue.forEach(applyLocal);
-      buildIndex();
-      store.set('boot', S.data);
-      const v = cur().v;
-      if (['finish', 'receiveOrder', 'unknown', 'pick'].indexOf(v) < 0) render();
+      applyBoot(r.data);
     } catch (e) {
-      S.offline = true;
-      if (cur().v === 'home') render();
+      lastRefresh = 0;
     }
   }
 
@@ -889,9 +916,16 @@
     S.queue = store.get('queue', []);
     if (S.data) buildIndex();
     render();
-    refresh().then(flush);
-    window.addEventListener('online', flush);
-    setInterval(() => { if (S.queue.length) flush(); }, 20000);
+    // קודם שולחים מה שמחכה (התשובה מביאה גם נתונים טריים); אם אין מה לשלוח – רק מרעננים
+    if (S.queue.length) flush(); else refresh();
+    const onNet = () => { if (cur().v === 'home') render(); if (navigator.onLine) flush(); };
+    window.addEventListener('online', onNet);
+    window.addEventListener('offline', onNet);
+    // חזרה לאפליקציה: שולחים מיד, ומרעננים אם עברו יותר מדקה
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      if (S.queue.length) { retryMs = 0; flush(); } else if (Date.now() - lastRefresh > 60000) refresh();
+    });
     setInterval(() => { if (!S.queue.length && document.visibilityState === 'visible' && cur().v === 'home') refresh(); }, 120000);
     if ('serviceWorker' in navigator && !window.DEMO_HANDLE) navigator.serviceWorker.register('sw.js').catch(() => {});
   }
