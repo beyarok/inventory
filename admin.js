@@ -61,7 +61,7 @@
     period: 'month',
     rangeFrom: '',
     rangeTo: '',
-    archTab: 'log',
+    archTab: 'moves',
     logQ: '',
     logPerson: '',
   };
@@ -70,7 +70,14 @@
     const req = Object.assign({ action, session: A.session }, payload || {});
     if (window.DEMO_HANDLE) return window.DEMO_HANDLE(req);
     const res = await fetch(window.APP_CONFIG.apiUrl, { method: 'POST', body: JSON.stringify(req) });
-    return res.json();
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      // השרת החזיר משהו שאינו תשובה רגילה (למשל דף שגיאה של גוגל) – שומרים פרט קצר לאבחון
+      console.error('Server response', res.status, text.slice(0, 500));
+      throw new Error('server ' + res.status + ': ' + text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80));
+    }
   }
 
   // ---------- נתונים: שמורים בדפדפן, מתעדכנים ברקע ----------
@@ -113,7 +120,7 @@
     try {
       r = await api(action, Object.assign({ withBoot: true }, payload));
     } catch (e) {
-      r = { ok: false, error: TA.offline };
+      r = { ok: false, error: offlineText(e) };
     } finally {
       saving--;
       syncState();
@@ -157,6 +164,9 @@
     el.textContent = text;
   }
 
+  // "אין חיבור", ואם השרת החזיר דף שגיאה – גם פרט קצר ממנו
+  const offlineText = e => TA.offline + (e && e.message && e.message.indexOf('server') === 0 ? ' (' + e.message + ')' : '');
+
   async function load() {
     loading++;
     syncState();
@@ -169,7 +179,7 @@
       setData(r.data);
       safeRender();
     } catch (e) {
-      toast(TA.offline, true);
+      toast(offlineText(e), true);
     } finally {
       loading--;
       syncState();
@@ -184,8 +194,8 @@
     try {
       r = await api(action, Object.assign({ withBoot: true }, payload));
     } catch (e) {
-      toast(TA.offline, true);
-      return { ok: false, error: TA.offline };
+      toast(offlineText(e), true);
+      return { ok: false, error: offlineText(e) };
     } finally {
       saving--;
       syncState();
@@ -384,17 +394,25 @@
         card(dg.overdraws.length, TA.cardOverdraw, 'stock', 'warn') + '</div>'
         : '<div class="box">' + esc(TA.allGood) + '</div>') +
       '<h2>' + esc(TA.recentMoves) + '</h2><div class="box" style="padding:0"><table>' +
-      moves.map(m => {
-        const dead = A.ix.reversed[m.id] || m.type === 'reversal';
-        const uk = !m.itemId && A.d.tables.UnknownItems.find(u => u.movementId === m.id);
-        return '<tr' + (dead ? ' class="arch"' : '') + '><td>' + esc((A.ix.people[m.byPersonId] || {}).name) + '</td><td>' +
-          esc(TA.moveTypes[m.type] || m.type) + ' ' + (m.qty ? num(m.qty) + ' ' : '') + esc(m.itemId ? displayName(m.itemId) : uk ? '"' + uk.text + '"' : '') +
-          (A.ix.reversed[m.id] ? ' <span class="tag">' + esc(TA.reversedTag) + '</span>' : '') +
-          '</td><td class="muted small">' + esc(moveWhere(m)) + '</td><td class="muted small">' + esc(when(m.clientAt || m.at)) + '</td>' +
-          '<td>' + (dead || isTmp(m.id) ? '' : '<button class="btn sm" data-a="reverseMove" data-id="' + m.id + '">' + esc(TA.undoMove) + '</button>') + '</td></tr>';
-      }).join('') +
+      moves.map(m => moveRow(m, false)).join('') +
       '</table></div>';
   };
+
+  // שורת תנועה – בבית (קצר) וברשימה המלאה (full: זמן ראשון + הערה)
+  function moveRow(m, full) {
+    const dead = A.ix.reversed[m.id] || m.type === 'reversal';
+    const uk = !m.itemId && A.d.tables.UnknownItems.find(u => u.movementId === m.id);
+    const what = esc(TA.moveTypes[m.type] || m.type) + ' ' + (m.qty ? num(m.qty) + ' ' + esc(m.itemId ? unitLabel(m.itemId) : '') + ' ' : '') +
+      esc(m.itemId ? displayName(m.itemId) : uk ? '"' + uk.text + '"' : '') +
+      (A.ix.reversed[m.id] ? ' <span class="tag">' + esc(TA.reversedTag) + '</span>' : '') +
+      (String(m.flags).indexOf('overdraw') >= 0 ? ' <span class="tag" style="background:var(--warn-bg);color:var(--warn)">' + esc(TA.overdrawTag) + '</span>' : '');
+    const btn = '<td>' + (dead || isTmp(m.id) ? '' : '<button class="btn sm" data-a="reverseMove" data-id="' + m.id + '">' + esc(TA.undoMove) + '</button>') + '</td>';
+    const who = '<td>' + esc((A.ix.people[m.byPersonId] || {}).name) + '</td>';
+    const time = '<td class="muted small" style="white-space:nowrap">' + esc(when(m.clientAt || m.at)) + '</td>';
+    return '<tr' + (dead ? ' class="arch"' : '') + '>' + (full
+      ? time + who + '<td>' + what + '</td><td class="muted small">' + esc(moveWhere(m)) + '</td><td class="muted small">' + esc(m.note) + '</td>'
+      : who + '<td>' + what + '</td><td class="muted small">' + esc(moveWhere(m)) + '</td>' + time) + btn + '</tr>';
+  }
 
   function moveWhere(m) {
     const parts = [];
@@ -1002,6 +1020,16 @@
   VIEW.archive = () => {
     let h = '<h1>' + esc(TA.menu.archive) + '</h1><div class="btns" style="margin-bottom:12px">' +
       seg('archTab', A.archTab, Object.keys(TA.archTabs).map(k => [k, TA.archTabs[k]]));
+    if (A.archTab === 'moves') {
+      const people = A.d.tables.People;
+      h += '<input class="in" id="movesQ" style="max-width:240px" placeholder="' + esc(TA.movesSearch) + '" value="' + esc(A.movesQ || '') + '">' +
+        '<select class="in" id="movesPerson" style="max-width:160px"><option value="">' + esc(TA.allPeople) + '</option>' +
+        people.map(p => '<option value="' + p.id + '"' + (A.movesPerson === p.id ? ' selected' : '') + '>' + esc(p.name) + '</option>').join('') + '</select>' +
+        '<select class="in" id="movesType" style="max-width:160px"><option value="">' + esc(TA.allTypes) + '</option>' +
+        Object.keys(TA.moveTypes).filter(k => k !== 'reversal').map(k => '<option value="' + k + '"' + (A.movesType === k ? ' selected' : '') + '>' + esc(TA.moveTypes[k]) + '</option>').join('') + '</select></div>' +
+        '<div id="movesBody">' + movesTable() + '</div>';
+      return h;
+    }
     if (A.archTab === 'log') {
       const people = A.d.tables.People;
       h += '<input class="in" id="logQ" style="max-width:240px" placeholder="' + esc(TA.logSearch) + '" value="' + esc(A.logQ) + '">' +
@@ -1018,6 +1046,27 @@
       rows.map(x => '<tr><td>' + esc(TA.entityNames[x.e]) + '</td><td>' + esc(x.e === 'Items' ? pathOf(x.r.id).map(p => p.name).concat([x.r.name]).join(' › ') : x.r.name) +
         '</td><td><button class="btn sm" data-a="archRestore" data-e="' + x.e + '" data-id="' + x.r.id + '">' + esc(TA.restore) + '</button></td></tr>').join('') + '</table></div>';
   };
+
+  // כל התנועות, החדשות קודם, עם חיפוש וסינון. מציגים 200 בכל פעם ("הצג עוד").
+  function movesTable() {
+    const words = norm(A.movesQ || '').split(' ').filter(Boolean);
+    const unknownText = {};
+    A.d.tables.UnknownItems.forEach(u => { unknownText[u.movementId] = u.text; });
+    const all = A.d.tables.Movements.slice().reverse().filter(m => {
+      if (A.movesPerson && m.byPersonId !== A.movesPerson) return false;
+      if (A.movesType && m.type !== A.movesType && !(m.type === 'reversal' && (A.ix.moves[m.reversesId] || {}).type === A.movesType)) return false;
+      if (!words.length) return true;
+      const hay = norm([m.itemId ? displayName(m.itemId) + ' ' + pathOf(m.itemId).map(p => p.name).join(' ') : unknownText[m.id] || '',
+        (A.ix.people[m.byPersonId] || {}).name, TA.moveTypes[m.type], moveWhere(m), m.note].join(' '));
+      return words.every(w => hay.indexOf(w) >= 0);
+    });
+    if (!all.length) return '<div class="box muted">' + esc(TA.nothing) + '</div>';
+    const limit = A.movesLimit || 200;
+    return '<div class="box" style="padding:0;overflow:auto"><table><tr><th>' + esc(TA.cWhen) + '</th><th>' + esc(TA.cWho) + '</th><th>' + esc(TA.cWhat) + '</th><th>' +
+      esc(TA.cFrom) + '</th><th>' + esc(TA.fNote) + '</th><th></th></tr>' + all.slice(0, limit).map(m => moveRow(m, true)).join('') + '</table></div>' +
+      '<div class="btns" style="margin-top:8px"><span class="hint">' + esc(fmt(TA.movesCount, { shown: Math.min(limit, all.length), total: all.length })) + '</span>' +
+      (all.length > limit ? '<button class="btn sm" data-a="movesMore">' + esc(TA.showMore) + '</button>' : '') + '</div>';
+  }
 
   function logTable() {
     const words = norm(A.logQ).split(' ').filter(Boolean);
@@ -1312,6 +1361,7 @@
   // ---------- הודעה קופצת ----------
   let toastTimer = null;
   function toast(text, err) {
+    if (!text) text = err ? (TA.error || 'שגיאה') : (TA.saved || 'נשמר');
     clearTimeout(toastTimer);
     document.querySelectorAll('.toast').forEach(t => t.remove());
     document.body.insertAdjacentHTML('beforeend', '<div class="toast' + (err ? ' err' : '') + '">' + esc(text) + '</div>');
@@ -1732,6 +1782,7 @@
 
   // ---- ארכיון ----
   H.archTab = el => { A.archTab = el.dataset.v; render(); };
+  H.movesMore = () => { A.movesLimit = (A.movesLimit || 200) + 200; document.getElementById('movesBody').innerHTML = movesTable(); };
   function restore(entity, id) {
     optimistic('admin.restore', { entity, id }, d => {
       const r = d.tables[entity].find(x => x.id === id);
@@ -1869,13 +1920,21 @@
     } else if (t.id === 'rFrom' || t.id === 'rTo') {
       A[t.id === 'rFrom' ? 'rangeFrom' : 'rangeTo'] = t.value;
       render();
+    } else if (t.id === 'movesPerson' || t.id === 'movesType') {
+      A[t.id] = t.value;
+      A.movesLimit = 200;
+      document.getElementById('movesBody').innerHTML = movesTable();
     } else if (t.id === 'logPerson') {
       A.logPerson = t.value;
       document.getElementById('logBody').innerHTML = logTable();
     }
   });
   document.addEventListener('input', e => {
-    if (e.target.id === 'logQ') {
+    if (e.target.id === 'movesQ') {
+      A.movesQ = e.target.value;
+      A.movesLimit = 200;
+      document.getElementById('movesBody').innerHTML = movesTable();
+    } else if (e.target.id === 'logQ') {
       A.logQ = e.target.value;
       document.getElementById('logBody').innerHTML = logTable();
     } else if (e.target.id === 'helpQ') {

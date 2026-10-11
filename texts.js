@@ -316,7 +316,12 @@ window.T = {
     valueNow: 'נכון להיום',
 
     // ---- ארכיון ----
-    archTabs: { log: 'יומן שינויים', removed: 'הוסרו' },
+    archTabs: { moves: 'כל התנועות', log: 'יומן שינויים', removed: 'הוסרו' },
+    movesSearch: 'חיפוש: פריט, עובד, מקום, פרויקט',
+    allTypes: 'כל הפעולות',
+    movesCount: 'מוצגות {shown} מתוך {total}',
+    showMore: 'הצג עוד',
+    overdrawTag: 'מעבר למלאי',
     logSearch: 'חיפוש ביומן',
     allPeople: 'כל האנשים',
     cWhen: 'מתי', cWhat: 'מה',
