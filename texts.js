@@ -86,6 +86,9 @@ window.T = {
 
     overdraw: 'לפי המערכת יש ב{place} רק {n}. לרשום בכל זאת?',
     overReturn: 'לפי המערכת משכת לפרויקט הזה רק {n}. לרשום בכל זאת?',
+    overMine: 'רשום עליך רק {n}',
+    youHave: 'רשום עליך: {n}',
+    youPulled: 'משכת לפרויקט הזה: {n}',
     overdrawYes: 'כן, לרשום',
     cancel: 'ביטול',
     qtyMissing: 'צריך לבחור כמות',

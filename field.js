@@ -406,7 +406,9 @@
       h += '<div class="field"><div class="label">' + esc(TX.from) + '</div>' + chipsHtml('from', s.from, v.from) + '</div>';
       h += '<div class="field"><div class="label">' + esc(fmt(TX.countQ, { place: v.from ? holderName(v.from) : '' })) + '</div>' + stepper(v, unit) + '</div>';
     } else {
-      h += '<div class="field"><div class="label">' + esc(TX.qty) + '</div>' + stepper(v, unit) + '</div>';
+      const max = myMax(v, v.projectId);
+      h += '<div class="field"><div class="label">' + esc(TX.qty) + '</div>' + stepper(v, unit) +
+        (max !== null ? '<div class="hint" style="text-align:center">' + esc(fmt(s.type === 'return_surplus' ? TX.youPulled : TX.youHave, { n: qtyLabel(max, v.itemId) })) + '</div>' : '') + '</div>';
       if (s.from) h += '<div class="field"><div class="label">' + esc(TX.from) + '</div>' + chipsHtml('from', s.from, v.from) + '</div>';
     }
     if (s.project) {
@@ -609,9 +611,28 @@
   H.step = el => {
     const v = cur();
     readInputs(v);
-    v.qty = Math.max(0, (parseInt(v.qty, 10) || 0) + Number(el.dataset.d));
+    let q = Math.max(0, (parseInt(v.qty, 10) || 0) + Number(el.dataset.d));
+    // "+" לא עובר את מה שרשום על העובד (ביחידה שנבחרה: גליל או מטר)
+    const max = myMax(v, v.projectId);
+    if (max !== null) {
+      const per = v.unitMode === 'buy' ? buyPer(v.itemId) : 1;
+      q = Math.min(q, Math.floor(max / per));
+    }
+    v.qty = q;
     render();
   };
+
+  // כמה העובד יכול להחזיר/להעביר מעצמו (ביחידת מלאי), או null כשאין מגבלה
+  function myMax(v, projectId) {
+    if (!v.itemId) return null;
+    const s = spec(v);
+    if (s.type === 'return_surplus') {
+      return myPulls().filter(p => p.itemId === v.itemId && (!projectId || p.projectId === projectId)).reduce((t, p) => t + p.qty, 0);
+    }
+    const from = s.fixedFrom || v.from || '';
+    if (from === me() && !s.counted) return qtyAt(v.itemId, me());
+    return null;
+  }
   H.lineStep = el => {
     const v = cur();
     readInputs(v);
@@ -694,16 +715,15 @@
     if (s.supplier && v.action === 'returnSupplier' && !v.supplierId) return fail(fmt(TX.missing, { field: TX.supplier }));
     const type = s.what ? v.what : s.type;
 
-    if (v.itemId && !s.counted && (from.indexOf('L:') === 0 || from.indexOf('P:') === 0) && qtyAt(v.itemId, from) < qty) {
+    // מה שרשום על העובד עצמו – אי אפשר להחזיר/להעביר יותר ממנו
+    const max = myMax(v, projectId);
+    if (max !== null && qty > max) {
+      return fail(fmt(s.type === 'return_surplus' ? TX.youPulled : TX.overMine, { n: qtyLabel(max, v.itemId) }));
+    }
+    // ממחסן או מאדם אחר – המלאי במערכת לא תמיד מדויק, אז רק מזהירים
+    if (max === null && v.itemId && !s.counted && (from.indexOf('L:') === 0 || from.indexOf('P:') === 0) && qtyAt(v.itemId, from) < qty) {
       const okGo = await confirmBox(fmt(TX.overdraw, { place: holderName(from), n: num(qtyAt(v.itemId, from)) }), TX.overdrawYes);
       if (!okGo) return;
-    }
-    if (type === 'return_surplus' && v.itemId) {
-      const pulled = myPulls().filter(p => p.itemId === v.itemId && p.projectId === projectId).reduce((t, p) => t + p.qty, 0);
-      if (qty > pulled) {
-        const okGo = await confirmBox(fmt(TX.overReturn, { n: num(pulled) }), TX.overdrawYes);
-        if (!okGo) return;
-      }
     }
     if (projectId) store.set('lastProject', projectId);
     const m = {
