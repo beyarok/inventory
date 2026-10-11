@@ -1,6 +1,6 @@
 // גרסת Firebase: שומר את קבצי הדף בטלפון (כולל ספריית Firebase), כדי שייפתח מיד – גם בלי קליטה.
 // בכל עדכון של הדף מעלים את מספר הגרסה.
-const VERSION = 'field2-1';
+const VERSION = 'field2-2';
 const FB = 'https://www.gstatic.com/firebasejs/12.4.0/';
 const FILES = ['./', 'index.html', 'config.js', 'core.js', 'engine.js', 'manifest.webmanifest',
   '../field.css', '../field.js', '../texts.js', '../icons/icon.svg',
