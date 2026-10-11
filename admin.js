@@ -384,9 +384,15 @@
         card(dg.overdraws.length, TA.cardOverdraw, 'stock', 'warn') + '</div>'
         : '<div class="box">' + esc(TA.allGood) + '</div>') +
       '<h2>' + esc(TA.recentMoves) + '</h2><div class="box" style="padding:0"><table>' +
-      moves.map(m => '<tr' + (A.ix.reversed[m.id] || m.type === 'reversal' ? ' class="arch"' : '') + '><td>' + esc((A.ix.people[m.byPersonId] || {}).name) + '</td><td>' +
-        esc(TA.moveTypes[m.type] || m.type) + ' ' + (m.qty ? num(m.qty) + ' ' : '') + esc(m.itemId ? displayName(m.itemId) : '') +
-        '</td><td class="muted small">' + esc(moveWhere(m)) + '</td><td class="muted small">' + esc(when(m.clientAt || m.at)) + '</td></tr>').join('') +
+      moves.map(m => {
+        const dead = A.ix.reversed[m.id] || m.type === 'reversal';
+        const uk = !m.itemId && A.d.tables.UnknownItems.find(u => u.movementId === m.id);
+        return '<tr' + (dead ? ' class="arch"' : '') + '><td>' + esc((A.ix.people[m.byPersonId] || {}).name) + '</td><td>' +
+          esc(TA.moveTypes[m.type] || m.type) + ' ' + (m.qty ? num(m.qty) + ' ' : '') + esc(m.itemId ? displayName(m.itemId) : uk ? '"' + uk.text + '"' : '') +
+          (A.ix.reversed[m.id] ? ' <span class="tag">' + esc(TA.reversedTag) + '</span>' : '') +
+          '</td><td class="muted small">' + esc(moveWhere(m)) + '</td><td class="muted small">' + esc(when(m.clientAt || m.at)) + '</td>' +
+          '<td>' + (dead || isTmp(m.id) ? '' : '<button class="btn sm" data-a="reverseMove" data-id="' + m.id + '">' + esc(TA.undoMove) + '</button>') + '</td></tr>';
+      }).join('') +
       '</table></div>';
   };
 
@@ -429,7 +435,8 @@
     return '<div class="box" style="margin-bottom:14px"><b>' + esc(TA.unknownTitle) + '</b><table>' + list.map(u =>
       '<tr><td>' + esc(fmt(TA.unknownLine, { text: u.text, person: (A.ix.people[u.byPersonId] || {}).name || '', date: when(u.at) })) + '</td>' +
       '<td class="btns" style="justify-content:flex-end"><button class="btn sm" data-a="unknownCreate" data-id="' + u.id + '">' + esc(TA.unknownCreate) + '</button>' +
-      '<button class="btn sm" data-a="unknownLink" data-id="' + u.id + '">' + esc(TA.unknownLink) + '</button></td></tr>').join('') + '</table></div>';
+      '<button class="btn sm" data-a="unknownLink" data-id="' + u.id + '">' + esc(TA.unknownLink) + '</button>' +
+      '<button class="btn sm danger" data-a="unknownDelete" data-id="' + u.id + '">' + esc(TA.unknownDelete) + '</button></td></tr>').join('') + '</table></div>';
   }
 
   function treeHtml() {
@@ -1465,6 +1472,35 @@
       d.tables.Items.forEach(i => { if (ids.indexOf(i.id) >= 0) i.archived = true; });
     });
     toast(fmt(TA.archived, { name: it.name }));
+  };
+  // ביטול דיווח = תנועה הפוכה (שום דבר לא נמחק; ביומן רואים שבוטל). הכמויות חוזרות למה שהיו.
+  function reverseMove(id) {
+    const m = A.ix.moves[id];
+    optimistic('admin.movement.reverse', { id }, d => {
+      d.tables.Movements.push({ id: tmpId(), at: new Date().toISOString(), type: 'reversal', itemId: m.itemId, qty: m.qty,
+        from: m.to, to: m.from, projectId: m.projectId, byPersonId: d.me.id, reversesId: m.id });
+      const adj = (h, q) => {
+        if (!m.itemId || !h || h === 'X' || h.indexOf('S:') === 0) return;
+        d.stock[m.itemId] = d.stock[m.itemId] || {};
+        d.stock[m.itemId][h] = (d.stock[m.itemId][h] || 0) + q;
+      };
+      adj(m.from, m.qty);
+      adj(m.to, -m.qty);
+      d.tables.UnknownItems.forEach(u => { if (u.movementId === id && u.status === 'open') u.status = 'canceled'; });
+    });
+  }
+  H.reverseMove = async el => {
+    const m = A.ix.moves[el.dataset.id];
+    const uk = !m.itemId && A.d.tables.UnknownItems.find(u => u.movementId === m.id);
+    const what = (A.ix.people[m.byPersonId] || {}).name + ' · ' + (TA.moveTypes[m.type] || '') + ' ' + num(m.qty) + ' ' +
+      (m.itemId ? displayName(m.itemId) : uk ? '"' + uk.text + '"' : '');
+    if (!(await confirmBox(fmt(TA.undoMoveConfirm, { what }), TA.undoMove, true))) return;
+    reverseMove(m.id);
+  };
+  H.unknownDelete = async el => {
+    const u = A.d.tables.UnknownItems.find(x => x.id === el.dataset.id);
+    if (!(await confirmBox(fmt(TA.unknownDeleteConfirm, { text: u.text, person: (A.ix.people[u.byPersonId] || {}).name || '' }), TA.unknownDelete, true))) return;
+    reverseMove(u.movementId);
   };
   H.unknownLink = async el => {
     const id = el.dataset.id;

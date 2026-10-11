@@ -183,6 +183,11 @@ window.T = {
     unknownCreate: 'צור פריט חדש',
     unknownLink: 'חבר לפריט קיים',
     unknownPick: 'לאיזה פריט זה?',
+    unknownDelete: 'מחק דיווח',
+    unknownDeleteConfirm: 'למחוק את הדיווח "{text}" של {person}? הדיווח יבוטל ולא ייכנס למלאי.',
+    undoMove: 'בטל',
+    undoMoveConfirm: 'לבטל את הדיווח: {what}? הכמויות יחזרו למה שהיו לפניו. ביומן יישאר רישום שהוא בוטל.',
+    reversedTag: 'בוטל',
 
     listTabs: { People: 'אנשים', Locations: 'מקומות', Suppliers: 'ספקים', Units: 'יחידות מידה' },
     add: 'הוסף',
