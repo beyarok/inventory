@@ -1,6 +1,6 @@
 // שומר את קבצי הדף בטלפון, כדי שהוא ייפתח מיד – גם בלי קליטה.
 // בכל עדכון של הדף מעלים את מספר הגרסה.
-const VERSION = 'field-3';
+const VERSION = 'field-4';
 const FILES = ['./', 'index.html', 'field.css', 'field.js', 'texts.js', 'config.js', 'manifest.webmanifest', 'icons/icon.svg'];
 
 self.addEventListener('install', e => {
@@ -16,8 +16,9 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
+  // no-cache: תמיד בודקים מול GitHub אם יש גרסה חדשה (בלי זה הטלפון יכול להחזיק גרסה ישנה עד 10 דקות)
   e.respondWith(
-    fetch(e.request).then(res => {
+    fetch(e.request, { cache: 'no-cache' }).then(res => {
       const copy = res.clone();
       caches.open(VERSION).then(c => c.put(e.request, copy));
       return res;
