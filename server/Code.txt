@@ -920,6 +920,10 @@ function validate_(entity, data, existing, name) {
       const p = Model.item(parentId);
       if (!p || p.archived) userError_(MSG.missing + 'תיקייה');
       if (id && Model.descendants(id).indexOf(parentId) >= 0) userError_('אי אפשר להעביר תיקייה לתוך עצמה');
+      // העברה לתוך פריט שיש לו מלאי הייתה משאירה מלאי על תיקייה
+      if (id && existing.parentId !== parentId && Model.isLeaf(parentId) && holdersOf_(parentId).length) {
+        userError_('ל"{name}" יש מלאי, ולכן אי אפשר להכניס לתוכו פריטים. קודם צריך להעביר את המלאי שלו.', { name: p.name });
+      }
     }
     if (Model.childrenOf(parentId).some(c => c.id !== id && same(c.name, name))) {
       userError_(MSG.duplicateName, { name });

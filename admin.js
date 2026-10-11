@@ -1122,15 +1122,19 @@
   // בוחר תיקייה (לעץ) או פריט (לפריט לא מוכר)
   function pickBox(title, leaves, excludeIds) {
     return new Promise(resolve => {
+      // יעד להעברה: תיקייה, או פריט שעוד אף פעם לא היה לו מלאי (למשל תיקייה חדשה שעוד ריקה)
+      const used = {};
+      A.d.tables.Movements.forEach(m => { if (m.itemId) used[m.itemId] = true; });
       const list = leaves
         ? A.d.tables.Items.filter(i => !i.archived && isLeaf(i.id))
-        : A.d.tables.Items.filter(i => !i.archived && !isLeaf(i.id) && (excludeIds || []).indexOf(i.id) < 0);
+        : A.d.tables.Items.filter(i => !i.archived && (!isLeaf(i.id) || !used[i.id]) && (excludeIds || []).indexOf(i.id) < 0);
       const label = i => pathOf(i.id).map(p => p.name).concat([i.name]).join(' › ');
       const rows = q => {
         const words = norm(q).split(' ').filter(Boolean);
         return (leaves ? [] : [{ id: '', l: TA.root }]).concat(list.map(i => ({ id: i.id, l: label(i) })))
           .filter(r => words.every(w => norm(r.l).indexOf(w) >= 0)).slice(0, 80)
-          .map(r => '<div class="node" data-pick="' + r.id + '" style="cursor:pointer;padding:6px;border-bottom:1px solid var(--line)">' + esc(r.l) + '</div>').join('');
+          .map(r => '<div class="node" data-pick="' + r.id + '" style="cursor:pointer;padding:6px;border-bottom:1px solid var(--line)">' +
+            (leaves ? '' : '<span class="ic">' + (r.id && isLeaf(r.id) ? ICON.file : ICON.folder) + '</span> ') + esc(r.l) + '</div>').join('');
       };
       const bg = modal('<h3>' + esc(title) + '</h3><input class="in" id="pq" placeholder="' + esc(TA.searchItems) + '"><div id="pl" style="max-height:50vh;overflow:auto">' + rows('') + '</div>' +
         '<div class="foot"><button class="btn" data-r="0">' + esc(TA.cancel) + '</button></div>');
