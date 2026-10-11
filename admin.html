@@ -3,23 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#4A3524">
 <title>ניהול מלאי</title>
-<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Assistant:wght@400;600&display=swap" rel="stylesheet">
-<script>
-  // תמיד טוענים את הגרסה האחרונה של הקבצים, כדי שקוד וטקסטים מגרסאות שונות לא יתערבבו
-  window.V = '?v=' + Date.now();
-  document.write('<link rel="stylesheet" href="admin.css' + V + '">');
-</script>
+<!-- מסך הניהול עבר לגרסה החדשה (Firebase) -->
+<script>location.replace('v2/admin.html' + location.hash);</script>
 </head>
-<body>
-<div id="app"></div>
-<script>
-  ['config.js', 'texts.js', 'help.js', 'admin.js'].forEach(f => document.write('<script src="' + f + V + '"><\/script>'));
-</script>
-<script>AdminApp.start();</script>
+<body style="font-family:Arial,sans-serif;text-align:center;padding-top:40vh">
+<a href="v2/admin.html">ניהול מלאי</a>
 </body>
 </html>
