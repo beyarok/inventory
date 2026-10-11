@@ -8,7 +8,7 @@ window.APP_CONFIG = {
     messagingSenderId: '810970717623',
     appId: '1:810970717623:web:6e3c71ef22dbb00a11dc32',
   },
-  // המערכת הקיימת (Google Sheets) – להעברת הנתונים בהקמה
+  // הסקריפט של גוגל: העברת הנתונים בהקמה, גיבוי ומייל סיכום
   oldApiUrl: 'https://script.google.com/macros/s/AKfycbwrImSX3eJNDJFJJ1_c8NXrqc6RKEc6akIJYvN6iy1s69cgRUIhnpj6wMWGygXNSKU8/exec',
   fieldUrl: '',
 };

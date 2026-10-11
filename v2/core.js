@@ -89,6 +89,13 @@ const MSG = {
   conflict: 'מישהו אחר שינה את זה בינתיים. רענן ונסה שוב.',
 };
 
+// גרסת Firebase (v2) – לא סודי (מופיע גם בדף)
+const FIREBASE = {
+  projectId: 'inventory-beyarok',
+  apiKey: 'AIzaSyB2LdUuYDc6MC9q7wggiMPF26eoFEN7pKY',
+  adminUrl: 'https://beyarok.github.io/inventory/v2/admin.html',
+};
+
 // ==================== Util.gs ====================
 // עזרים כלליים – משותפים לגיליון (Db.gs) ולגרסת Firebase (v2/engine.js)
 
@@ -1048,7 +1055,7 @@ function doPost(e) {
 
 function handle_(req) {
   try {
-    Db.reset();
+    Db.useExternal(null);
     Model.reset();
     return { ok: true, data: route_(req) };
   } catch (err) {
@@ -1119,6 +1126,7 @@ function route_(req) {
   const action = String(req.action || '');
   if (action === 'ping') return { ver: dataVersion_() };
   if (action === 'admin.login') return adminLogin_(req.idToken);
+  if (action === 'fb.backup') return fbBackupRequest_(req.idToken); // "גבה עכשיו" מהגרסה החדשה
   if (FIELD_ACTIONS[action]) return FIELD_ACTIONS[action](req, fieldPerson_(req.token));
   if (ADMIN_ACTIONS[action]) {
     const me = adminPerson_(req.session);
@@ -1226,7 +1234,8 @@ function buildDigest_() {
   const s = Db.settings();
   const now = Date.now();
   const lateMs = (Number(s.lateDays) || 7) * 86400000;
-  const since = s.lastDigestAt ? Date.parse(s.lastDigestAt) : 0;
+  const last = lastDigestAt_();
+  const since = last ? Date.parse(last) : 0;
   const unitName = id => (Db.byId('Units', Model.inherited(id, 'unitId')) || {}).name || '';
 
   const belowMin = Db.all('Items').filter(it => it.minQty !== null && it.minQty !== '' && Model.isLeaf(it.id))
@@ -1260,11 +1269,22 @@ function buildDigest_() {
   return { count, belowMin, late, missingPrice, unknown, overdraws, closedWithStuff };
 }
 
+// מתי נשלח הסיכום האחרון. בגרסה החדשה הנתונים ב-Firebase (לקריאה בלבד) – לכן שומרים את זה בהגדרות הסקריפט.
+function lastDigestAt_() {
+  if (fbActive_()) return PropertiesService.getScriptProperties().getProperty('FB_LAST_DIGEST_AT') || '';
+  return Db.setting('lastDigestAt');
+}
+function setLastDigestAt_(v) {
+  if (fbActive_()) PropertiesService.getScriptProperties().setProperty('FB_LAST_DIGEST_AT', v);
+  else Db.setSetting('lastDigestAt', v);
+}
+
 function sendDigest() {
   Db.reset();
   Model.reset();
+  if (fbActive_()) fbLoad_();
   const d = buildDigest_();
-  Db.setSetting('lastDigestAt', now_());
+  setLastDigestAt_(now_());
   if (!d.count) return; // ביום בלי כלום לטפל – לא שולחים
 
   const to = Db.all('People').filter(p => p.role === 'admin' && p.alerts && p.email).map(p => p.email);
@@ -1296,11 +1316,16 @@ function sendDigest() {
 
 // עותק של כל הגיליון לתיקיית הגיבויים
 function backupNow_() {
-  const file = DriveApp.getFileById(SpreadsheetApp.getActive().getId());
   const folders = DriveApp.getFoldersByName(CONFIG.BACKUP_FOLDER);
   const folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(CONFIG.BACKUP_FOLDER);
   const name = 'גיבוי מלאי ' + today_();
-  file.makeCopy(name, folder);
+  if (fbActive_()) {
+    // גרסה חדשה: הנתונים ב-Firebase
+    fbLoad_();
+    fbRawBackup_(name, folder);
+  } else {
+    DriveApp.getFileById(SpreadsheetApp.getActive().getId()).makeCopy(name, folder);
+  }
   const readable = readableSnapshot_(folder);
   return { name, readable };
 }

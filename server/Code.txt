@@ -90,6 +90,13 @@ const MSG = {
   conflict: 'מישהו אחר שינה את זה בינתיים. רענן ונסה שוב.',
 };
 
+// גרסת Firebase (v2) – לא סודי (מופיע גם בדף)
+const FIREBASE = {
+  projectId: 'inventory-beyarok',
+  apiKey: 'AIzaSyB2LdUuYDc6MC9q7wggiMPF26eoFEN7pKY',
+  adminUrl: 'https://beyarok.github.io/inventory/v2/admin.html',
+};
+
 // ==================== Util.gs ====================
 // עזרים כלליים – משותפים לגיליון (Db.gs) ולגרסת Firebase (v2/engine.js)
 
@@ -133,6 +140,8 @@ function round2_(n) {
 
 const Db = (() => {
   let tables = {};
+  let external = null; // נתונים מ-Firebase (Firestore.gs) – לקריאה בלבד
+
 
   function fields_(name) {
     return SCHEMA[name].map(f => {
@@ -156,6 +165,7 @@ const Db = (() => {
   function load_(name) {
     if (tables[name]) return tables[name];
     if (!SCHEMA[name]) throw new Error('Unknown table ' + name);
+    if (external) return loadExternal_(name);
     const sh = SpreadsheetApp.getActive().getSheetByName(name);
     if (!sh) throw new Error('Missing sheet ' + name + ' – run setup');
     const values = sh.getDataRange().getValues();
@@ -175,6 +185,31 @@ const Db = (() => {
     const t = { name, sheet: sh, headers, typeOf, rows, byId, lastRow: Math.max(sh.getLastRow(), 1), next: null };
     tables[name] = t;
     return t;
+  }
+
+  // טבלה מתוך החלקים שנקראו מ-Firestore: { cols, rows: [[...]] } לכל חלק
+  function loadExternal_(name) {
+    const typeOf = {};
+    const headers = fields_(name).map(f => { typeOf[f.key] = f.type; return f.key; });
+    const rows = [];
+    const byId = {};
+    (external.tables[name] || []).forEach(part => {
+      const at = headers.map(h => part.cols.indexOf(h));
+      part.rows.forEach(arr => {
+        const o = {};
+        headers.forEach((h, i) => { o[h] = parse_(at[i] < 0 ? '' : arr[at[i]], typeOf[h]); });
+        if (name === 'People') o.token = external.tokenOf[o.id] || '';
+        rows.push(o);
+        if (o.id) byId[o.id] = o;
+      });
+    });
+    const t = { name, sheet: null, headers, typeOf, rows, byId, lastRow: 0, next: null };
+    tables[name] = t;
+    return t;
+  }
+
+  function readOnly_(t) {
+    if (!t.sheet) throw new Error('Read-only data (Firebase): ' + t.name);
   }
 
   function rowValues_(t, o) {
@@ -209,6 +244,7 @@ const Db = (() => {
   function insertMany(name, objs) {
     if (!objs.length) return [];
     const t = load_(name);
+    readOnly_(t);
     objs.forEach(o => { if (ID_PREFIX[name] && !o.id) o.id = nextId_(t); });
     const start = t.lastRow + 1;
     t.sheet.getRange(start, 1, objs.length, t.headers.length).setValues(objs.map(o => rowValues_(t, o)));
@@ -229,6 +265,7 @@ const Db = (() => {
 
   function update(name, id, patch) {
     const t = load_(name);
+    readOnly_(t);
     const o = t.byId[id];
     if (!o) throw new Error('Not found: ' + name + ' ' + id);
     Object.keys(patch).forEach(k => {
@@ -247,6 +284,7 @@ const Db = (() => {
 
   function setSetting(key, value) {
     const t = load_('Settings');
+    readOnly_(t);
     const row = t.rows.find(o => o.key === key);
     if (row) {
       row.value = String(value);
@@ -273,7 +311,9 @@ const Db = (() => {
 
   function reset() { tables = {}; }
 
-  return { all, byId, insert, insertMany, update, setting, setSetting, settings, clean, reset, fields_ };
+  function useExternal(src) { external = src; tables = {}; }
+
+  return { all, byId, insert, insertMany, update, setting, setSetting, settings, clean, reset, fields_, useExternal };
 })();
 
 // ==================== Model.gs ====================
@@ -1198,7 +1238,7 @@ function doPost(e) {
 
 function handle_(req) {
   try {
-    Db.reset();
+    Db.useExternal(null);
     Model.reset();
     return { ok: true, data: route_(req) };
   } catch (err) {
@@ -1269,6 +1309,7 @@ function route_(req) {
   const action = String(req.action || '');
   if (action === 'ping') return { ver: dataVersion_() };
   if (action === 'admin.login') return adminLogin_(req.idToken);
+  if (action === 'fb.backup') return fbBackupRequest_(req.idToken); // "גבה עכשיו" מהגרסה החדשה
   if (FIELD_ACTIONS[action]) return FIELD_ACTIONS[action](req, fieldPerson_(req.token));
   if (ADMIN_ACTIONS[action]) {
     const me = adminPerson_(req.session);
@@ -1376,7 +1417,8 @@ function buildDigest_() {
   const s = Db.settings();
   const now = Date.now();
   const lateMs = (Number(s.lateDays) || 7) * 86400000;
-  const since = s.lastDigestAt ? Date.parse(s.lastDigestAt) : 0;
+  const last = lastDigestAt_();
+  const since = last ? Date.parse(last) : 0;
   const unitName = id => (Db.byId('Units', Model.inherited(id, 'unitId')) || {}).name || '';
 
   const belowMin = Db.all('Items').filter(it => it.minQty !== null && it.minQty !== '' && Model.isLeaf(it.id))
@@ -1410,11 +1452,22 @@ function buildDigest_() {
   return { count, belowMin, late, missingPrice, unknown, overdraws, closedWithStuff };
 }
 
+// מתי נשלח הסיכום האחרון. בגרסה החדשה הנתונים ב-Firebase (לקריאה בלבד) – לכן שומרים את זה בהגדרות הסקריפט.
+function lastDigestAt_() {
+  if (fbActive_()) return PropertiesService.getScriptProperties().getProperty('FB_LAST_DIGEST_AT') || '';
+  return Db.setting('lastDigestAt');
+}
+function setLastDigestAt_(v) {
+  if (fbActive_()) PropertiesService.getScriptProperties().setProperty('FB_LAST_DIGEST_AT', v);
+  else Db.setSetting('lastDigestAt', v);
+}
+
 function sendDigest() {
   Db.reset();
   Model.reset();
+  if (fbActive_()) fbLoad_();
   const d = buildDigest_();
-  Db.setSetting('lastDigestAt', now_());
+  setLastDigestAt_(now_());
   if (!d.count) return; // ביום בלי כלום לטפל – לא שולחים
 
   const to = Db.all('People').filter(p => p.role === 'admin' && p.alerts && p.email).map(p => p.email);
@@ -1446,11 +1499,16 @@ function sendDigest() {
 
 // עותק של כל הגיליון לתיקיית הגיבויים
 function backupNow_() {
-  const file = DriveApp.getFileById(SpreadsheetApp.getActive().getId());
   const folders = DriveApp.getFoldersByName(CONFIG.BACKUP_FOLDER);
   const folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(CONFIG.BACKUP_FOLDER);
   const name = 'גיבוי מלאי ' + today_();
-  file.makeCopy(name, folder);
+  if (fbActive_()) {
+    // גרסה חדשה: הנתונים ב-Firebase
+    fbLoad_();
+    fbRawBackup_(name, folder);
+  } else {
+    DriveApp.getFileById(SpreadsheetApp.getActive().getId()).makeCopy(name, folder);
+  }
   const readable = readableSnapshot_(folder);
   return { name, readable };
 }
@@ -1565,6 +1623,125 @@ function installTriggers_() {
   ScriptApp.newTrigger('monthlyBackup').timeBased().onMonthDay(1).atHour(3).inTimezone(CONFIG.TIMEZONE).create();
 }
 
+// ==================== Firestore.gs ====================
+// חיבור לגרסת Firebase (v2): קריאת הנתונים מ-Firestore, כדי שמייל הסיכום והגיבוי יעבדו על הנתונים החדשים.
+// פעיל רק כשמוגדר Script property בשם FIREBASE_PROJECT (תפריט "חיבור לגרסה החדשה").
+// הקריאה נעשית בהרשאה של בעל הסקריפט (ScriptApp.getOAuthToken) – הוא הבעלים של פרויקט ה-Firebase.
+
+function fbProject_() {
+  return PropertiesService.getScriptProperties().getProperty('FIREBASE_PROJECT') || '';
+}
+
+function fbActive_() {
+  return !!fbProject_();
+}
+
+// כל המסמכים באוסף (עם דפדוף)
+function fsList_(col) {
+  const proj = fbProject_();
+  const base = 'https://firestore.googleapis.com/v1/projects/' + proj + '/databases/(default)/documents/' + col + '?pageSize=300';
+  const out = [];
+  let page = '';
+  do {
+    const url = base + (page ? '&pageToken=' + encodeURIComponent(page) : '');
+    const headers = { Authorization: 'Bearer ' + ScriptApp.getOAuthToken(), 'X-Goog-User-Project': proj };
+    let res = UrlFetchApp.fetch(url, { headers, muteHttpExceptions: true });
+    if (res.getResponseCode() === 403) {
+      // בלי "פרויקט לחיוב" – יש חשבונות שבהם זה עובד רק כך
+      delete headers['X-Goog-User-Project'];
+      res = UrlFetchApp.fetch(url, { headers, muteHttpExceptions: true });
+    }
+    if (res.getResponseCode() !== 200) throw new Error('Firebase ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 300));
+    const j = JSON.parse(res.getContentText());
+    (j.documents || []).forEach(d => out.push({ id: d.name.split('/').pop(), fields: fsFields_(d.fields || {}) }));
+    page = j.nextPageToken || '';
+  } while (page);
+  return out;
+}
+
+function fsFields_(fields) {
+  const o = {};
+  Object.keys(fields).forEach(k => { o[k] = fsValue_(fields[k]); });
+  return o;
+}
+
+function fsValue_(v) {
+  if ('stringValue' in v) return v.stringValue;
+  if ('integerValue' in v) return Number(v.integerValue);
+  if ('doubleValue' in v) return Number(v.doubleValue);
+  if ('booleanValue' in v) return v.booleanValue;
+  if ('nullValue' in v) return null;
+  if ('timestampValue' in v) return v.timestampValue;
+  if ('mapValue' in v) return fsFields_(v.mapValue.fields || {});
+  if ('arrayValue' in v) return (v.arrayValue.values || []).map(fsValue_);
+  return null;
+}
+
+// טוען את כל הנתונים מ-Firestore לתוך Db (לקריאה בלבד). מחזיר את מספר הגרסה.
+function fbLoad_() {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const docs = {};
+    fsList_('c').forEach(d => { docs[d.id] = d.fields; });
+    const meta = docs._meta;
+    if (!meta) throw new Error('אין עדיין נתונים בגרסה החדשה');
+    const ids = Object.keys(meta.chunks || {});
+    // כל החלקים צריכים להיות מאותה גרסה (אם מישהו שמר באמצע הקריאה – קוראים שוב)
+    if (!ids.every(id => docs[id] && Number(docs[id].rev) === Number(meta.chunks[id]))) continue;
+    const tables = {};
+    ids.sort((a, b) => docs[a].seq - docs[b].seq).forEach(id => {
+      const c = docs[id];
+      (tables[c.t] = tables[c.t] || []).push(JSON.parse(c.data || '{"cols":[],"rows":[]}'));
+    });
+    const tokenOf = {};
+    fsList_('tokens').forEach(d => {
+      if (!tokenOf[d.fields.personId] || d.fields.active) tokenOf[d.fields.personId] = d.id;
+    });
+    Db.useExternal({ tables, tokenOf });
+    Model.reset();
+    return meta.rev;
+  }
+  throw new Error('הנתונים השתנו בזמן הקריאה. נסה שוב בעוד רגע.');
+}
+
+// גיבוי גולמי מ-Firestore: קובץ עם לשונית לכל טבלה, באותו מבנה כמו הגיליון המקורי (לשחזור)
+function fbRawBackup_(name, folder) {
+  const ss = SpreadsheetApp.create(name);
+  Object.keys(SCHEMA).forEach(table => {
+    const keys = Db.fields_(table).map(f => f.key);
+    const rows = Db.all(table, { includeArchived: true }).map(o => keys.map(k => {
+      const v = o[k];
+      if (v === null || v === undefined) return '';
+      if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
+      return String(v);
+    }));
+    const sh = ss.insertSheet(table);
+    const data = [keys].concat(rows);
+    const rg = sh.getRange(1, 1, data.length, keys.length);
+    rg.setNumberFormat('@');
+    rg.setValues(data);
+    sh.setFrozenRows(1);
+  });
+  const first = ss.getSheets()[0];
+  if (first && !SCHEMA[first.getName()] && ss.getSheets().length > 1) ss.deleteSheet(first);
+  DriveApp.getFileById(ss.getId()).moveTo(folder);
+}
+
+// "גבה עכשיו" מהגרסה החדשה: מזהים את המנהל לפי הכניסה שלו ל-Firebase
+function fbBackupRequest_(idToken) {
+  if (!fbActive_()) userError_('הסקריפט עוד לא חובר לגרסה החדשה');
+  const key = PropertiesService.getScriptProperties().getProperty('FIREBASE_API_KEY') || '';
+  const res = UrlFetchApp.fetch('https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=' + encodeURIComponent(key), {
+    method: 'post', contentType: 'application/json', payload: JSON.stringify({ idToken: String(idToken || '') }), muteHttpExceptions: true,
+  });
+  if (res.getResponseCode() !== 200) authError_(MSG.sessionExpired);
+  const user = (JSON.parse(res.getContentText()).users || [])[0] || {};
+  const email = String(user.email || '').toLowerCase();
+  fbLoad_();
+  const me = email && Db.all('People').find(p => p.role === 'admin' && String(p.email).toLowerCase().trim() === email);
+  if (!me) authError_(MSG.notAdmin);
+  return backupNow_();
+}
+
 // ==================== Setup.gs ====================
 // תפריט בגיליון והתקנה ראשונית. מריצים רק מחשבון הבעלים של הגיליון.
 
@@ -1572,6 +1749,7 @@ function onOpen() {
   SpreadsheetApp.getUi().createMenu('מערכת מלאי')
     .addItem('התקנה ראשונית / עדכון מבנה', 'setup')
     .addItem('הגדרת כתובות וכניסה עם גוגל', 'configure')
+    .addItem('חיבור לגרסה החדשה (Firebase)', 'connectFirebase')
     .addSeparator()
     .addItem('שלח סיכום יומי עכשיו', 'sendDigest')
     .addItem('גבה עכשיו', 'backupFromMenu')
@@ -1661,4 +1839,25 @@ function backupFromMenu() {
   requireOwner_();
   const r = backupNow_();
   SpreadsheetApp.getUi().alert('נשמרו בתיקייה "' + CONFIG.BACKUP_FOLDER + '":\n' + r.name + ' (לשחזור)\n' + r.readable + ' (לקריאה)');
+}
+
+// מחבר את מייל הסיכום והגיבוי לגרסה החדשה: מעכשיו הם קוראים את הנתונים מ-Firebase.
+function connectFirebase() {
+  requireOwner_();
+  const props = PropertiesService.getScriptProperties();
+  props.setProperties({
+    FIREBASE_PROJECT: FIREBASE.projectId,
+    FIREBASE_API_KEY: FIREBASE.apiKey,
+    ADMIN_URL: FIREBASE.adminUrl,
+  });
+  try {
+    Db.reset();
+    const rev = fbLoad_();
+    const n = name => Db.all(name).length;
+    SpreadsheetApp.getUi().alert('מחובר לגרסה החדשה.\n' + n('Items') + ' פריטים, ' + n('People') + ' אנשים, ' +
+      n('Movements') + ' תנועות (גרסה ' + rev + ').\nמעכשיו מייל הסיכום והגיבוי עובדים על הנתונים של הגרסה החדשה.');
+  } catch (e) {
+    props.deleteProperty('FIREBASE_PROJECT');
+    SpreadsheetApp.getUi().alert('החיבור לא הצליח, שום דבר לא השתנה.\n' + (e.message || e));
+  }
 }

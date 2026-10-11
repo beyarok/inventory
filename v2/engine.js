@@ -215,6 +215,7 @@
       return rows.map(o => Object.assign({}, o));
     }
     function reset() { tables = {}; }
+    function useExternal() { tables = {}; } // בגיליון: מקור Firebase. כאן הכל כבר Firebase
     function begin(b) { base = b; tables = {}; }
 
     // מה צריך לכתוב: החלקים שהשתנו (וחלקים חדשים לשורות חדשות)
@@ -265,7 +266,7 @@
 
     function table(name) { return tables[name] || null; }
 
-    return { all, byId, insert, insertMany, update, setting, setSetting, settings, clean, reset, fields_, begin, collect, table };
+    return { all, byId, insert, insertMany, update, setting, setSetting, settings, clean, reset, useExternal, fields_, begin, collect, table };
   })();
 
   // ---------- התאמות בקוד המשותף ----------
@@ -329,6 +330,7 @@
       if (req.action === 'ping') return { ok: true, data: { ver: String(st.rev) } };
       if (st.authError) return { ok: false, error: st.mode === 'field' ? MSG.badLink : MSG.notAdmin, code: 'AUTH' };
       if (!st.user) return { ok: false, error: MSG.sessionExpired, code: 'AUTH' };
+      if (req.action === 'admin.backup.now') return await backupViaScript(req);
       if (READ_ONLY.indexOf(req.action) >= 0) {
         // היה ריק ממש עכשיו (למשל מיד אחרי ההקמה) – נותנים רגע לנתונים להגיע
         for (let i = 0; i < 20 && st.readyState === 'failed' && !st.authError; i++) await new Promise(r => setTimeout(r, 150));
@@ -409,6 +411,20 @@
       if (r.data.boot && r.data.boot.ver === TMP_VER) r.data.boot.ver = ver;
     }
     return copy(r);
+  }
+
+  // "גבה עכשיו": הגיבוי נעשה בסקריפט של גוגל (שומר קבצים ב-Drive). הוא מזהה את המנהל לפי הכניסה ל-Firebase.
+  async function backupViaScript(req) {
+    const idToken = await st.user.getIdToken();
+    const res = await fetch(window.APP_CONFIG.oldApiUrl, { method: 'POST', body: JSON.stringify({ action: 'fb.backup', idToken }) });
+    let r;
+    try { r = JSON.parse(await res.text()); } catch (e) { throw offlineError(); }
+    if (!r.ok) return { ok: false, error: r.error || MSG.generic }; // לא מנתקים את המנהל בגלל תקלה בגיבוי
+    if (!req.withBoot) return r;
+    await withTimeout(st.ready, 20000);
+    Db.begin(baseFromLocal());
+    const boot = handle_({ action: 'admin.bootstrap', session: 'fb' });
+    return copy({ ok: true, data: { result: r.data, boot: boot.data } });
   }
 
   // אנשים: הקישורים האישיים והרשאות המנהל נשמרים במסמכים נפרדים (לפיהם כללי האבטחה עובדים)
