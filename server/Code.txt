@@ -1413,11 +1413,108 @@ function backupNow_() {
   const folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(CONFIG.BACKUP_FOLDER);
   const name = 'גיבוי מלאי ' + today_();
   file.makeCopy(name, folder);
-  return { name };
+  const readable = readableSnapshot_(folder);
+  return { name, readable };
 }
 
 function monthlyBackup() {
+  Db.reset();
+  Model.reset();
   backupNow_();
+}
+
+// ---------- קובץ קריא: "מצב מלאי YYYY-MM-DD" ----------
+// העותק הגולמי נועד לשחזור. הקובץ הזה נועד לאנשים: עברית, שמות במקום מזהים, בלי קודים.
+
+const MOVE_NAMES = {
+  opening: 'מלאי פתיחה', receive: 'קבלה מהזמנה', purchase: 'קנייה בחנות', pull: 'משיכה לפרויקט',
+  return_surplus: 'החזרת עודף', transfer: 'העברה', repair_out: 'נשלח לתיקון', repair_in: 'חזר מתיקון',
+  broken: 'נהרס', lost: 'אבד', found: 'נמצא', return_supplier: 'החזרה לספק', count: 'תיקון ספירה', reversal: 'ביטול דיווח',
+};
+
+function readableSnapshot_(folder) {
+  const name = 'מצב מלאי ' + today_();
+  const ss = SpreadsheetApp.create(name);
+  const unitOf = id => (Db.byId('Units', Model.inherited(id, 'unitId')) || {}).name || '';
+  const pathOf = id => Model.path(id).slice(0, -1).join(' › ');
+  const nameOf = (table, id) => (Db.byId(table, id) || {}).name || '';
+  const fmtDate = iso => (iso ? Utilities.formatDate(new Date(iso), CONFIG.TIMEZONE, 'dd.MM.yyyy HH:mm') : '');
+  const lastPrice = {};
+  Db.all('Prices').forEach(p => { if (!lastPrice[p.itemId] || p.at > lastPrice[p.itemId].at) lastPrice[p.itemId] = p; });
+  const valueOf = it => (it.value !== null && it.value !== '' ? it.value : (lastPrice[it.id] || {}).unitPrice || 0);
+  const balances = Model.balances();
+
+  // מלאי: שורה לכל פריט, עמודה לכל מקום
+  const locs = Db.all('Locations');
+  const leaves = Db.all('Items').filter(it => Model.isLeaf(it.id))
+    .sort((a, b) => (pathOf(a.id) + a.name).localeCompare(pathOf(b.id) + b.name, 'he'));
+  const stockRows = leaves.map(it => {
+    const row = balances[it.id] || {};
+    const people = Object.keys(row).filter(h => h.indexOf('P:') === 0).reduce((s, h) => s + row[h], 0);
+    const w = Model.warehouseQty(it.id);
+    const min = it.minQty === null ? '' : it.minQty;
+    const val = valueOf(it);
+    return [pathOf(it.id), it.name, Model.kindOf(it.id) === 'tool' ? 'כלי' : 'מתכלה', unitOf(it.id)]
+      .concat(locs.map(l => row['L:' + l.id] || ''), [people || '', w, min, min !== '' && w < min ? 'כן' : '',
+        val ? Math.round(val * 100) / 100 : '', val ? Math.round(val * w * 100) / 100 : '']);
+  });
+  writeSheet_(ss, 'מלאי', ['תיקייה', 'פריט', 'סוג', 'יחידה'].concat(locs.map(l => l.name),
+    ['אצל אנשים', 'סה"כ במחסנים', 'מינימום', 'מתחת למינימום', 'שווי ליחידה (₪)', 'שווי במחסנים (₪)']), stockRows);
+
+  // אצל אנשים
+  const peopleRows = [];
+  Db.all('People').forEach(p => {
+    Model.heldBy('P:' + p.id).forEach(h => {
+      const it = Model.item(h.itemId);
+      if (it) peopleRows.push([p.name, pathOf(it.id), it.name, h.qty, unitOf(it.id)]);
+    });
+  });
+  writeSheet_(ss, 'אצל אנשים', ['עובד', 'תיקייה', 'פריט', 'כמות', 'יחידה'], peopleRows);
+
+  // תנועות של 31 הימים האחרונים
+  const since = Date.now() - 31 * 86400000;
+  const reversed = Model.reversedIds_();
+  const unknown = {};
+  Db.all('UnknownItems').forEach(u => { unknown[u.movementId] = u.text; });
+  const holder = h => (h === 'X' ? '' : Model.holderName(h));
+  const moveRows = Db.all('Movements').filter(m => Date.parse(m.clientAt || m.at) >= since).reverse().map(m => {
+    const it = Model.item(m.itemId);
+    return [fmtDate(m.clientAt || m.at), nameOf('People', m.byPersonId), MOVE_NAMES[m.type] || m.type, m.qty,
+      it ? unitOf(it.id) : '', it ? it.name : unknown[m.id] ? '"' + unknown[m.id] + '" (לא מוכר)' : '',
+      holder(m.from), holder(m.to), nameOf('Projects', m.projectId), m.note, reversed[m.id] ? 'בוטל' : ''];
+  });
+  writeSheet_(ss, 'תנועות 31 יום', ['מתי', 'מי', 'פעולה', 'כמות', 'יחידה', 'פריט', 'מאיפה', 'לאן', 'פרויקט', 'הערה', 'בוטל'], moveRows);
+
+  // הזמנות פתוחות
+  const received = Model.receivedByLine();
+  const orderRows = [];
+  Db.all('Orders').filter(o => ['draft', 'sent', 'partial'].indexOf(o.status) >= 0).forEach(o => {
+    orderLines_(o.id).forEach(l => {
+      const it = Model.item(l.itemId) || {};
+      const per = l.buyUnitQty || 1;
+      orderRows.push([o.number, nameOf('Suppliers', o.supplierId), nameOf('Locations', o.destId), ORDER_STATUS_NAMES[o.status],
+        fmtDate(o.sentAt), it.name || '', l.qtyBuy, Math.round((received[l.id] || 0) / per * 100) / 100,
+        per > 1 ? it.buyUnitName : unitOf(l.itemId), l.unitPriceBuy === null ? '' : l.unitPriceBuy]);
+    });
+  });
+  writeSheet_(ss, 'הזמנות פתוחות', ['מס׳', 'ספק', 'יעד', 'מצב', 'נשלחה', 'פריט', 'הוזמן', 'התקבל', 'יחידה', 'מחיר ליחידה (₪)'], orderRows);
+
+  // הגיליון הריק שנוצר עם הקובץ
+  const first = ss.getSheets()[0];
+  if (first && first.getName() !== 'מלאי' && ss.getSheets().length > 1) ss.deleteSheet(first);
+  DriveApp.getFileById(ss.getId()).moveTo(folder);
+  return name;
+}
+
+function writeSheet_(ss, name, header, rows) {
+  const sh = ss.insertSheet(name);
+  const data = [header].concat(rows.length ? rows : [header.map((h, i) => (i === 0 ? 'אין' : ''))]);
+  sh.getRange(1, 1, data.length, header.length).setValues(data);
+  sh.getRange(1, 1, 1, header.length).setFontWeight('bold').setBackground('#F3EEE7');
+  sh.setFrozenRows(1);
+  sh.setRightToLeft(true);
+  sh.autoResizeColumns(1, header.length);
+  return sh;
 }
 
 // מתקין מחדש את הטריגרים: סיכום יומי בשעה מההגדרות, גיבוי ב-1 לכל חודש
@@ -1525,5 +1622,5 @@ function configure() {
 function backupFromMenu() {
   requireOwner_();
   const r = backupNow_();
-  SpreadsheetApp.getUi().alert('נשמר גיבוי: ' + r.name);
+  SpreadsheetApp.getUi().alert('נשמרו בתיקייה "' + CONFIG.BACKUP_FOLDER + '":\n' + r.name + ' (לשחזור)\n' + r.readable + ' (לקריאה)');
 }
