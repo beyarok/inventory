@@ -358,6 +358,8 @@
     v.init = true;
     const s = spec(v);
     v.qty = s.counted ? '' : 1;
+    // פריט שנקנה ביחידות גדולות (גליל = 100 מטר): ברירת המחדל היא לדווח ביחידה הגדולה
+    v.unitMode = buyPer(v.itemId) > 1 ? 'buy' : 'stock';
     if (s.from && s.from.length === 1) v.from = s.from[0].h;
     if (v.action === 'broken' && qtyAt(v.itemId, me()) > 0) v.from = me();
     if (v.action === 'take' && s.from && !v.from) {
@@ -434,9 +436,25 @@
   };
 
   function stepper(v, unit) {
-    return '<div class="stepper"><button data-a="step" data-d="1">+</button>' +
+    const per = buyPer(v.itemId);
+    let h = '<div class="stepper"><button data-a="step" data-d="1">+</button>' +
       '<input id="qty" type="number" inputmode="numeric" min="0" step="1" value="' + esc(v.qty) + '">' +
-      '<button data-a="step" data-d="-1">−</button><span class="unit">' + esc(unit) + '</span></div>';
+      '<button data-a="step" data-d="-1">−</button>' + (per > 1 ? '' : '<span class="unit">' + esc(unit) + '</span>') + '</div>';
+    if (per > 1) {
+      // מתג: גלילים / מטר, ומתחת – כמה זה ביחידת המלאי
+      const it = item(v.itemId);
+      const n = parseInt(v.qty, 10) || 0;
+      h += '<div class="chips" style="justify-content:center">' +
+        '<button class="chip' + (v.unitMode === 'buy' ? ' on' : '') + '" data-a="unitMode" data-v="buy">' + esc(it.buyUnitName) + '</button>' +
+        '<button class="chip' + (v.unitMode === 'stock' ? ' on' : '') + '" data-a="unitMode" data-v="stock">' + esc(unit || TX.units) + '</button></div>' +
+        (v.unitMode === 'buy' ? '<div class="hint" id="qtyConv" style="text-align:center">' + esc(fmt(TX.unitEquals, { n: num(n), unit: it.buyUnitName, total: num(n * per), stockUnit: unit })) + '</div>' : '');
+    }
+    return h;
+  }
+  // כמה יחידות מלאי ביחידת קנייה אחת (0/1 = אין יחידת קנייה)
+  function buyPer(id) {
+    const it = id && item(id);
+    return it && it.buyUnitName && Number(it.buyUnitQty) > 1 ? Number(it.buyUnitQty) : 1;
   }
 
   // ---------- קבלת סחורה ----------
@@ -582,6 +600,12 @@
     v.err = '';
     render();
   };
+  H.unitMode = el => {
+    const v = cur();
+    readInputs(v);
+    v.unitMode = el.dataset.v;
+    render();
+  };
   H.step = el => {
     const v = cur();
     readInputs(v);
@@ -616,6 +640,14 @@
     H[el.dataset.a](el);
   });
   document.addEventListener('input', e => {
+    // הקלדת כמות בגלילים – מעדכנים את "= 200 מטר" תוך כדי
+    if (e.target.id === 'qty' && document.getElementById('qtyConv')) {
+      const v = cur();
+      const it = item(v.itemId);
+      const n = parseInt(e.target.value, 10) || 0;
+      document.getElementById('qtyConv').textContent = fmt(TX.unitEquals, { n: num(n), unit: it.buyUnitName, total: num(n * buyPer(v.itemId)), stockUnit: unitName(v.itemId) });
+      return;
+    }
     if (e.target.id === 'q') {
       const v = cur();
       v.q = e.target.value;
@@ -644,8 +676,11 @@
     readInputs(v);
     const s = spec(v);
     const fail = msg => { v.err = msg; render(); };
-    const qty = parseInt(v.qty, 10);
-    if (s.counted ? !(qty >= 0) : !(qty > 0)) return fail(TX.qtyMissing);
+    const typed = parseInt(v.qty, 10);
+    if (s.counted ? !(typed >= 0) : !(typed > 0)) return fail(TX.qtyMissing);
+    // בגלילים: המערכת סופרת ביחידת המלאי (מטר), אז 2 גלילים = 200
+    const per = v.unitMode === 'buy' ? buyPer(v.itemId) : 1;
+    const qty = typed * per;
     const from = s.fixedFrom || v.from || '';
     const to = s.fixedTo || v.to || '';
     if (s.from && !v.from) return fail(fmt(TX.missing, { field: TX.from }));
@@ -676,7 +711,9 @@
       qty: s.counted ? null : qty, countedQty: s.counted ? qty : null, from, to, projectId,
       supplierId: v.supplierId && v.supplierId !== '_other' ? v.supplierId : '', note: v.note || '',
     };
-    enqueue([m], fmt(TX.sent, { qty: s.counted ? num(qty) : qtyLabel(qty, v.itemId), item: v.itemId ? displayName(v.itemId) : v.unknownText }));
+    const label = per > 1 ? num(typed) + ' ' + item(v.itemId).buyUnitName + ' (' + qtyLabel(qty, v.itemId) + ')'
+      : s.counted ? num(qty) : qtyLabel(qty, v.itemId);
+    enqueue([m], fmt(TX.sent, { qty: label, item: v.itemId ? displayName(v.itemId) : v.unknownText }));
   }
 
   function sendReceive() {

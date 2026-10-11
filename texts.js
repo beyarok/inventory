@@ -39,6 +39,8 @@ window.T = {
     atPerson: 'אצל {name}',
 
     qty: 'כמה',
+    unitEquals: '{n} {unit} = {total} {stockUnit}',
+    units: 'יחידות',
     from: 'מאיפה',
     to: 'לאן',
     project: 'לאיזה פרויקט',
