@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#4A3524">
+<title>ניהול מלאי</title>
+<link rel="icon" href="../icons/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Assistant:wght@400;600&display=swap" rel="stylesheet">
+<script>
+  // תמיד טוענים את הגרסה האחרונה של הקבצים
+  window.V = '?v=' + Date.now();
+  document.write('<link rel="stylesheet" href="../admin.css' + V + '">');
+</script>
+</head>
+<body>
+<div id="app"></div>
+<script>
+  ['config.js', '../texts.js', '../help.js', 'core.js', 'engine.js', '../admin.js'].forEach(f => document.write('<script src="' + f + V + '"><\/script>'));
+</script>
+<script>
+(async () => {
+  const app = document.getElementById('app');
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  app.innerHTML = '<div class="center muted">טוען…</div>';
+  await ENGINE.init('admin');
+  if (!ENGINE.user || await ENGINE.dataState() !== 'empty') return AdminApp.start();
+
+  // ---------- הקמה ראשונה ----------
+  const oldSession = (() => { try { return localStorage.getItem('inv:admin:session') || ''; } catch (e) { return ''; } })();
+  app.innerHTML = '<div class="center"><div class="box" style="max-width:520px;text-align:right;display:flex;flex-direction:column;gap:12px">' +
+    '<h1 style="margin:0">הקמת הגרסה החדשה</h1>' +
+    '<div>נכנסת בתור ' + esc(ENGINE.user.email) + '. המאגר החדש עוד ריק. מאיפה להתחיל?</div>' +
+    '<button class="btn p" id="imp">להעביר את כל הנתונים מהמערכת הקיימת</button>' +
+    '<div class="hint">' + (oldSession ? 'פריטים, מקומות, אנשים (עם אותם קישורים), תנועות, הזמנות והגדרות. המערכת הקיימת לא משתנה.'
+      : 'קודם צריך להיכנס למסך הניהול הקיים בדפדפן הזה: <a class="link" href="../admin.html">מסך הניהול הקיים</a>, ואז לחזור לכאן.') + '</div>' +
+    '<button class="btn" id="fresh">להתחיל ריק</button>' +
+    '<div id="msg" class="err"></div></div></div>';
+  const msg = t => { document.getElementById('msg').textContent = t; };
+  const busy = on => app.querySelectorAll('button').forEach(b => { b.disabled = on; });
+  document.getElementById('imp').onclick = async () => {
+    if (!oldSession) return msg('קודם צריך להיכנס למסך הניהול הקיים בדפדפן הזה.');
+    busy(true);
+    msg('מביא את הנתונים מהמערכת הקיימת… (עד חצי דקה)');
+    try {
+      const res = await fetch(APP_CONFIG.oldApiUrl, { method: 'POST', body: JSON.stringify({ action: 'admin.bootstrap', session: oldSession }) });
+      const r = await res.json();
+      if (!r.ok) { busy(false); return msg(r.code === 'AUTH' ? 'הכניסה למסך הניהול הקיים פגה. צריך להיכנס אליו שוב ולחזור לכאן.' : r.error); }
+      msg('שומר במאגר החדש…');
+      await ENGINE.importOld(r.data);
+      location.reload();
+    } catch (e) {
+      console.error(e);
+      busy(false);
+      msg('לא הצליח: ' + (e.message || e));
+    }
+  };
+  document.getElementById('fresh').onclick = async () => {
+    busy(true);
+    try {
+      await ENGINE.startFresh(ENGINE.user.displayName);
+      location.reload();
+    } catch (e) {
+      console.error(e);
+      busy(false);
+      msg('לא הצליח: ' + (e.message || e));
+    }
+  };
+})();
+</script>
+</body>
+</html>

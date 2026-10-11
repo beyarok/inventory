@@ -33,8 +33,9 @@
   };
 
   // ---------- מצב ----------
+  const SKEY = (window.STORE_PREFIX || 'inv:') + 'admin:session';
   const A = {
-    session: window.DEMO_SESSION || (() => { try { return localStorage.getItem('inv:admin:session') || ''; } catch (e) { return ''; } })(),
+    session: window.DEMO_SESSION || (() => { try { return localStorage.getItem(SKEY) || ''; } catch (e) { return ''; } })(),
     d: null,
     ix: null,
     section: 'home',
@@ -69,6 +70,7 @@
   async function api(action, payload) {
     const req = Object.assign({ action, session: A.session }, payload || {});
     if (window.DEMO_HANDLE) return window.DEMO_HANDLE(req);
+    if (window.LOCAL_API) return window.LOCAL_API(req); // גרסת Firebase
     const res = await fetch(window.APP_CONFIG.apiUrl, { method: 'POST', body: JSON.stringify(req) });
     const text = await res.text();
     try {
@@ -83,7 +85,7 @@
   // ---------- נתונים: שמורים בדפדפן, מתעדכנים ברקע ----------
   // השרת של גוגל עונה תוך 2–13 שניות. לכן המסך תמיד מוצג מיד מהנתונים השמורים,
   // וכל פנייה לשרת רצה ברקע עם חיווי קטן "מתעדכן" / "שומר".
-  const CACHE_KEY = 'inv:admin:data';
+  const CACHE_KEY = (window.STORE_PREFIX || 'inv:') + 'admin:data';
   let loading = 0;
   let saving = 0;
 
@@ -215,12 +217,13 @@
   }
 
   function logout(msg) {
+    if (window.ENGINE) window.ENGINE.signOut().catch(() => {});
     A.session = '';
     A.d = null;
     A.server = null;
     pendingOps.length = 0;
     try {
-      localStorage.removeItem('inv:admin:session');
+      localStorage.removeItem(SKEY);
       localStorage.removeItem(CACHE_KEY);
     } catch (e) { /* */ }
     A.loginMsg = msg || '';
@@ -350,6 +353,22 @@
   }
 
   function mountLogin() {
+    // גרסת Firebase: כפתור כניסה עם גוגל של Firebase
+    if (window.ENGINE) {
+      const b = document.getElementById('gbtn');
+      b.innerHTML = '<button class="btn p" id="fbLogin">' + esc(TA.loginGoogle) + '</button>';
+      b.querySelector('#fbLogin').addEventListener('click', async () => {
+        try {
+          await window.ENGINE.signIn();
+          if (await window.ENGINE.dataState() === 'empty') return location.reload(); // הקמה ראשונה
+          onCredential({ credential: '' });
+        } catch (e) {
+          A.loginMsg = TA.error;
+          render();
+        }
+      });
+      return;
+    }
     const cid = window.APP_CONFIG && window.APP_CONFIG.googleClientId;
     if (!cid) return;
     const go = () => {
@@ -368,7 +387,7 @@
       const r = await api('admin.login', { idToken: resp.credential });
       if (!r.ok) { A.loginMsg = r.error || TA.notAdmin; return render(); }
       A.session = r.data.session;
-      try { localStorage.setItem('inv:admin:session', A.session); } catch (e) { /* */ }
+      try { localStorage.setItem(SKEY, A.session); } catch (e) { /* */ }
       A.loginMsg = '';
       render();
       load();
@@ -1827,6 +1846,15 @@
     try {
       const r = await api('admin.order.pdf', { id: A.orderId });
       if (!r.ok) return toast(r.error || TA.error, true);
+      // גרסת Firebase: ההזמנה נפתחת בחלון הדפסה (שם בוחרים "שמור כ-PDF")
+      if (r.data.html) {
+        const w = window.open('', '_blank');
+        if (!w) return toast(TA.error, true);
+        w.document.write(r.data.html.replace('<head>', '<head><title>' + esc(r.data.fileName.replace(/\.pdf$/, '')) + '</title>'));
+        w.document.close();
+        setTimeout(() => w.print(), 300);
+        return;
+      }
       const bytes = Uint8Array.from(atob(r.data.base64), c => c.charCodeAt(0));
       const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
       const a = document.createElement('a');
@@ -2102,13 +2130,17 @@
     render();
     if (A.session) load();
     // כל 15 שניות: "השתנה משהו?" (שאלה קלה). רק אם כן – מושכים את הנתונים.
-    setInterval(poll, 15000);
+    setInterval(poll, window.ENGINE ? 1500 : 15000); // בגרסת Firebase הבדיקה מקומית (בלי פנייה לרשת)
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') poll(); });
+    // גרסת Firebase: שינוי של מישהו אחר מגיע מיד
+    window.addEventListener('inv:changed', poll);
   }
 
   let polling = false;
+  let pollAgain = false; // שינוי שהגיע באמצע בדיקה – בודקים שוב מיד אחריה
   async function poll() {
-    if (polling || !A.session || !A.server || document.visibilityState !== 'visible' || loading || saving || pendingOps.length) return;
+    if (polling) { pollAgain = true; return; }
+    if (!A.session || !A.server || document.visibilityState !== 'visible' || loading || saving || pendingOps.length) return;
     polling = true;
     try {
       const r = await api('ping');
@@ -2117,6 +2149,7 @@
       /* ננסה שוב בבדיקה הבאה */
     } finally {
       polling = false;
+      if (pollAgain) { pollAgain = false; setTimeout(poll, 0); }
     }
   }
 

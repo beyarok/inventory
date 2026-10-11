@@ -44,7 +44,7 @@
     toast: null,
     fatal: null,
   };
-  const key = n => 'inv:' + n + ':' + S.token;
+  const key = n => (window.STORE_PREFIX || 'inv:') + n + ':' + S.token;
   const store = {
     get(n, def) { try { const v = localStorage.getItem(key(n)); return v ? JSON.parse(v) : def; } catch (e) { return def; } },
     set(n, v) { try { localStorage.setItem(key(n), JSON.stringify(v)); } catch (e) { /* אחסון מלא או חסום */ } },
@@ -54,6 +54,7 @@
   async function api(action, payload) {
     const req = Object.assign({ action, token: S.token }, payload || {});
     if (window.DEMO_HANDLE) return window.DEMO_HANDLE(req);
+    if (window.LOCAL_API) return window.LOCAL_API(req); // גרסת Firebase
     const res = await fetch(window.APP_CONFIG.apiUrl, { method: 'POST', body: JSON.stringify(req) });
     const text = await res.text();
     try {
@@ -911,8 +912,10 @@
   }
 
   let polling = false;
+  let pollAgain = false; // שינוי שהגיע באמצע בדיקה – בודקים שוב מיד אחריה
   async function poll() {
-    if (polling || S.flushing || S.queue.length || !S.data || document.visibilityState !== 'visible') return;
+    if (polling) { pollAgain = true; return; }
+    if (S.flushing || S.queue.length || !S.data || document.visibilityState !== 'visible') return;
     polling = true;
     try {
       const r = await api('ping');
@@ -921,6 +924,7 @@
       /* ננסה שוב בבדיקה הבאה */
     } finally {
       polling = false;
+      if (pollAgain) { pollAgain = false; setTimeout(poll, 0); }
     }
   }
 
@@ -943,7 +947,9 @@
       if (S.queue.length) { retryMs = 0; flush(); } else poll();
     });
     // כל 20 שניות: "השתנה משהו?" – רק אם כן מושכים את כל הנתונים (פריט חדש, הזמנה חדשה, מלאי שהשתנה)
-    setInterval(poll, 20000);
+    setInterval(poll, window.ENGINE ? 1500 : 20000); // בגרסת Firebase הבדיקה מקומית (בלי פנייה לרשת)
+    // גרסת Firebase: שינוי של מישהו אחר מגיע מיד
+    window.addEventListener('inv:changed', poll);
     if ('serviceWorker' in navigator && !window.DEMO_HANDLE) navigator.serviceWorker.register('sw.js').catch(() => {});
   }
 

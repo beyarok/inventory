@@ -241,6 +241,7 @@ window.T = {
     nothing: 'אין',
     setQty: 'עדכן כמות',
     moveStock: 'העבר',
+    loginGoogle: 'כניסה עם חשבון גוגל',
     returnToStock: 'החזר למחסן',
     returnTitle: 'החזרה למחסן · {item} · {person}',
     onlyPulled: 'העובד משך רק {n}',
