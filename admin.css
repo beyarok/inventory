@@ -123,6 +123,9 @@ details.help ol, details.help ul { padding-right: 22px; margin: 6px 0; }
 .hbar div { height: 10px; background: var(--green); border-radius: 5px; }
 .tag button { color: var(--green-dark); font-size: 11px; margin-right: 4px; }
 .printonly { display: none; }
+/* דף ספירה: עמודות ריקות לכתיבה ביד */
+table.countsheet td { height: 30px; }
+table.countsheet td.blankcell { min-width: 90px; border-right: 1px solid var(--line); border-left: 1px solid var(--line); }
 @media print {
   .side, .topbar, .noprint, .toast { display: none !important; }
   .main { padding: 0; }

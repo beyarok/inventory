@@ -986,6 +986,8 @@
       const head = [TA.cSupplier].concat(mks.map(mk => mk.slice(5) + '.' + mk.slice(2, 4)), [TA.total]);
       return { head, rows, barCol: head.length - 1, money: head.map((h, i) => i).slice(1) };
     }
+    if (R === 'asof') return asofData();
+    if (R === 'countSheet') return countSheetData();
     // שווי המלאי לפי מקום – נכון להיום
     const by = {};
     Object.keys(A.d.stock).forEach(id => {
@@ -999,19 +1001,90 @@
       rows: Object.keys(by).filter(h => by[h] > 0).map(h => [holderName(h), by[h]]).sort((a, b) => b[1] - a[1]) };
   }
 
+  // ---- מצב לתאריך: מחשבים את המלאי מכל התנועות עד סוף היום שנבחר ----
+  const todayIso = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+  const isoToShort = iso => (iso ? iso.slice(8, 10) + '.' + iso.slice(5, 7) + '.' + iso.slice(2, 4) : '');
+  const placeOptions = () => A.d.tables.Locations.filter(l => !l.archived);
+
+  function asofData() {
+    const date = A.asofDate || todayIso();
+    const end = Date.parse(date + 'T23:59:59');
+    const b = {};
+    A.d.tables.Movements.forEach(m => {
+      if (!m.itemId || !m.qty || moveTime(m) > end) return;
+      const add = (h, q) => {
+        if (!h || h === 'X' || h.indexOf('S:') === 0) return;
+        b[m.itemId] = b[m.itemId] || {};
+        b[m.itemId][h] = (b[m.itemId][h] || 0) + q;
+      };
+      add(m.from, -m.qty);
+      add(m.to, m.qty);
+    });
+    const leafs = leaves().sort((a, x) => (pathOf(a.id).map(p => p.name).join() + a.name).localeCompare(pathOf(x.id).map(p => p.name).join() + x.name, 'he', { numeric: true }));
+    const folder = id => pathOf(id).map(p => p.name).join(' › ');
+    const place = A.asofPlace || '';
+    const title = fmt(TA.asofTitle, { date: isoToShort(date), place: place ? ' · ' + holderName(place) : '' });
+    if (place) {
+      return { title, head: [TA.cFolder, TA.cItem, TA.cUnit, TA.cQty],
+        rows: leafs.filter(it => (b[it.id] || {})[place]).map(it => [folder(it.id), it.name, unitName(it.id), b[it.id][place]]) };
+    }
+    const locs = placeOptions();
+    const isWh = h => { const l = A.ix.locs[h.slice(2)]; return h.indexOf('L:') === 0 && l && STOCK_TYPES.indexOf(l.type) >= 0; };
+    return { title, head: [TA.cFolder, TA.cItem, TA.cUnit].concat(locs.map(l => l.name), [TA.cAtPeople, TA.total]),
+      rows: leafs.filter(it => b[it.id] && Object.keys(b[it.id]).some(h => b[it.id][h])).map(it => {
+        const row = b[it.id];
+        const people = Object.keys(row).filter(h => h.indexOf('P:') === 0).reduce((s, h) => s + row[h], 0);
+        const wh = Object.keys(row).filter(isWh).reduce((s, h) => s + row[h], 0);
+        return [folder(it.id), it.name, unitName(it.id)].concat(locs.map(l => row['L:' + l.id] || ''), [people || '', wh]);
+      }) };
+  }
+
+  // ---- דף ספירה: מה שאמור להיות במקום, עם עמודות ריקות לכתיבה ביד ----
+  function countSheetData() {
+    const locs = placeOptions();
+    if (!A.countPlace && locs.length) A.countPlace = 'L:' + (locs.find(l => l.type === 'hub') || locs[0]).id;
+    const place = A.countPlace;
+    const folder = id => pathOf(id).map(p => p.name).join(' › ');
+    const list = leaves().filter(it => A.countAll || ((A.d.stock[it.id] || {})[place] || 0) !== 0)
+      .sort((a, x) => (folder(a.id) + ' ' + a.name).localeCompare(folder(x.id) + ' ' + x.name, 'he', { numeric: true }));
+    const head = [TA.cFolder, TA.cItem, TA.cUnit].concat(A.countShowQty ? [TA.cInSystem] : [], [TA.cCounted, TA.cRemark]);
+    return { title: fmt(TA.countTitle, { place: holderName(place), date: isoToShort(todayIso()) }), head, blank: [head.length - 2, head.length - 1], sheet: true,
+      rows: list.map(it => [folder(it.id), it.name, unitName(it.id)].concat(A.countShowQty ? [(A.d.stock[it.id] || {})[place] || 0] : [], ['', ''])) };
+  }
+
+  function reportControls() {
+    const R = A.report;
+    const placeSelect = (id, cur, withAll) => '<select class="in" id="' + id + '" style="max-width:180px">' +
+      (withAll ? '<option value="">' + esc(TA.allPlaces) + '</option>' : '') +
+      placeOptions().map(l => '<option value="L:' + l.id + '"' + (cur === 'L:' + l.id ? ' selected' : '') + '>' + esc(l.name) + '</option>').join('') + '</select>';
+    if (R === 'value') return '<span class="muted">' + esc(TA.valueNow) + '</span>';
+    if (R === 'asof') {
+      return '<span class="muted">' + esc(TA.asofDate) + '</span><input class="in" type="date" id="rAsof" style="max-width:170px" value="' + esc(A.asofDate || todayIso()) + '">' +
+        placeSelect('rAsofPlace', A.asofPlace || '', true);
+    }
+    if (R === 'countSheet') {
+      return placeSelect('rCountPlace', A.countPlace, false) +
+        '<label class="small inline"><input type="checkbox" id="cAll"' + (A.countAll ? ' checked' : '') + '> ' + esc(TA.countAllItems) + '</label>' +
+        '<label class="small inline"><input type="checkbox" id="cQty"' + (A.countShowQty ? ' checked' : '') + '> ' + esc(TA.countShowQty) + '</label>';
+    }
+    return seg('period', A.period, Object.keys(TA.periods).map(k => [k, TA.periods[k]])) +
+      (A.period === 'range' ? '<span>' + esc(TA.from) + '</span><input class="in" type="date" id="rFrom" style="max-width:160px" value="' + esc(A.rangeFrom) + '"><span>' + esc(TA.to) + '</span><input class="in" type="date" id="rTo" style="max-width:160px" value="' + esc(A.rangeTo) + '">' : '');
+  }
+
   VIEW.reports = () => {
     const d = reportData();
     const max = d.barCol !== undefined ? Math.max.apply(null, d.rows.map(r => r[d.barCol]).concat([0])) : 0;
-    const cell = (v, i) => (d.money && d.money.indexOf(i) >= 0 ? money(v) : typeof v === 'number' ? num(v) : esc(v));
+    const cell = (v, i) => (d.blank && d.blank.indexOf(i) >= 0 ? '<td class="blankcell"></td>'
+      : '<td>' + (d.money && d.money.indexOf(i) >= 0 ? money(v) : typeof v === 'number' ? num(v) : esc(v)) + '</td>');
     return '<h1>' + esc(TA.menu.reports) + '</h1><div class="btns noprint" style="margin-bottom:12px">' +
       seg('report', A.report, Object.keys(TA.reportNames).map(k => [k, TA.reportNames[k]])) + '</div>' +
-      '<div class="btns noprint" style="margin-bottom:12px">' + (A.report === 'value' ? '<span class="muted">' + esc(TA.valueNow) + '</span>'
-        : seg('period', A.period, Object.keys(TA.periods).map(k => [k, TA.periods[k]])) +
-          (A.period === 'range' ? '<span>' + esc(TA.from) + '</span><input class="in" type="date" id="rFrom" style="max-width:160px" value="' + esc(A.rangeFrom) + '"><span>' + esc(TA.to) + '</span><input class="in" type="date" id="rTo" style="max-width:160px" value="' + esc(A.rangeTo) + '">' : '')) +
+      '<div class="btns noprint" style="margin-bottom:12px">' + reportControls() +
       '<span style="flex:1"></span><button class="btn" data-a="exportCsv">' + esc(TA.downloadExcel) + '</button><button class="btn" data-a="printReport">' + esc(TA.printPdf) + '</button></div>' +
-      '<h2 class="printonly">' + esc(TA.reportNames[A.report]) + '</h2>' +
-      (d.rows.length ? '<div class="box" style="padding:0;overflow:auto"><table><tr>' + d.head.map(h => '<th>' + esc(h) + '</th>').join('') + (d.barCol !== undefined ? '<th style="width:28%"></th>' : '') + '</tr>' +
-        d.rows.map(r => '<tr>' + r.map((v, i) => '<td>' + cell(v, i) + '</td>').join('') + (d.barCol !== undefined ? '<td>' + bar(r[d.barCol], max) + '</td>' : '') + '</tr>').join('') +
+      (A.report === 'countSheet' ? '<div class="hint noprint" style="margin-bottom:10px">' + esc(TA.countHint) + '</div>' : '') +
+      '<h2 class="printonly">' + esc(d.title || TA.reportNames[A.report]) + '</h2>' +
+      (d.title ? '<h2 class="noprint" style="margin-top:0">' + esc(d.title) + '</h2>' : '') +
+      (d.rows.length ? '<div class="box" style="padding:0;overflow:auto"><table class="' + (d.sheet ? 'countsheet' : '') + '"><tr>' + d.head.map(h => '<th>' + esc(h) + '</th>').join('') + (d.barCol !== undefined ? '<th style="width:28%"></th>' : '') + '</tr>' +
+        d.rows.map(r => '<tr>' + r.map(cell).join('') + (d.barCol !== undefined ? '<td>' + bar(r[d.barCol], max) + '</td>' : '') + '</tr>').join('') +
         '</table></div>' : '<div class="box muted">' + esc(TA.reportEmpty) + '</div>');
   };
 
@@ -1772,7 +1845,7 @@
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = TA.reportNames[A.report] + '.csv';
+    a.download = (d.title || TA.reportNames[A.report]) + '.csv';
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -1917,6 +1990,12 @@
       render();
     } else if (t.id === 'assignSel' && t.value) {
       assignContainer(t.value, A.projectId, true);
+    } else if (t.id === 'rAsof' || t.id === 'rAsofPlace' || t.id === 'rCountPlace') {
+      A[{ rAsof: 'asofDate', rAsofPlace: 'asofPlace', rCountPlace: 'countPlace' }[t.id]] = t.value;
+      render();
+    } else if (t.id === 'cAll' || t.id === 'cQty') {
+      A[t.id === 'cAll' ? 'countAll' : 'countShowQty'] = t.checked;
+      render();
     } else if (t.id === 'rFrom' || t.id === 'rTo') {
       A[t.id === 'rFrom' ? 'rangeFrom' : 'rangeTo'] = t.value;
       render();
