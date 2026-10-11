@@ -1,6 +1,6 @@
 // שומר את קבצי הדף בטלפון, כדי שהוא ייפתח מיד – גם בלי קליטה.
 // בכל עדכון של הדף מעלים את מספר הגרסה.
-const VERSION = 'field-9';
+const VERSION = 'field-10';
 const FILES = ['./', 'index.html', 'field.css', 'field.js', 'texts.js', 'config.js', 'manifest.webmanifest', 'icons/icon.svg'];
 
 self.addEventListener('install', e => {

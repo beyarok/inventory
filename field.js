@@ -378,6 +378,9 @@
       const has = s.from.filter(c => c.n > 0);
       if (has.length === 1) v.from = has[0].h;
     }
+    // מחזיר/מעביר פחות מגליל שלם (למשל 30 מטר) – מתחילים במטרים
+    const max = myMax(v, v.projectId);
+    if (v.unitMode === 'buy' && max !== null && max < buyPer(v.itemId)) v.unitMode = 'stock';
     v.what = 'broken';
     autoProject(v);
   }
@@ -618,14 +621,23 @@
     const v = cur();
     readInputs(v);
     v.unitMode = el.dataset.v;
+    // לא יותר ממה שרשום על העובד, ביחידה החדשה
+    const max = myMax(v, v.projectId);
+    if (max !== null) v.qty = Math.min(parseInt(v.qty, 10) || 0, Math.floor(max / (v.unitMode === 'buy' ? buyPer(v.itemId) : 1)));
     render();
   };
   H.step = el => {
     const v = cur();
     readInputs(v);
-    let q = Math.max(0, (parseInt(v.qty, 10) || 0) + Number(el.dataset.d));
-    // "+" לא עובר את מה שרשום על העובד (ביחידה שנבחרה: גליל או מטר)
+    const d = Number(el.dataset.d);
     const max = myMax(v, v.projectId);
+    // פחות מגליל שלם רשום על העובד – "+" עובר לבד למטרים
+    if (d > 0 && max !== null && v.unitMode === 'buy' && max < buyPer(v.itemId)) {
+      v.unitMode = 'stock';
+      v.qty = 0;
+    }
+    let q = Math.max(0, (parseInt(v.qty, 10) || 0) + d);
+    // "+" לא עובר את מה שרשום על העובד (ביחידה שנבחרה: גליל או מטר)
     if (max !== null) {
       const per = v.unitMode === 'buy' ? buyPer(v.itemId) : 1;
       q = Math.min(q, Math.floor(max / per));
