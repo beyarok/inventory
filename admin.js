@@ -1444,7 +1444,7 @@
   const H = {};
   H.menu =() => document.getElementById('side').classList.toggle('open');
   // מעבר בין חלקים גם מושך את הנתונים העדכניים מהשטח
-  H.section = el => { A.section = el.dataset.s; render(); window.scrollTo(0, 0); load(); };
+  H.section = el => { A.section = el.dataset.s; render(); window.scrollTo(0, 0); poll(); };
   H.logout = () => logout('');
   H.selectNode = el => {
     A.sel = el.dataset.id;
@@ -1606,7 +1606,7 @@
   };
 
   // ---- הזמנות ----
-  H.orderTab = el => { A.orderTab = el.dataset.v; A.orderId = ''; render(); load(); };
+  H.orderTab = el => { A.orderTab = el.dataset.v; A.orderId = ''; render(); poll(); };
   H.openOrder = el => { A.orderId = el.dataset.id; render(); window.scrollTo(0, 0); };
   H.orderBack = () => { A.orderId = ''; render(); };
   H.basketAdd = async () => {
@@ -1956,11 +1956,23 @@
     }
     render();
     if (A.session) load();
-    // רענון שקט כל שתי דקות, כשאין חלון פתוח (כדי לא למחוק מה שמקלידים)
-    setInterval(() => {
-      if (A.session && A.d && document.visibilityState === 'visible' && !document.getElementById('modal') &&
-        !(document.activeElement && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName))) load();
-    }, 120000);
+    // כל 15 שניות: "השתנה משהו?" (שאלה קלה). רק אם כן – מושכים את הנתונים.
+    setInterval(poll, 15000);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') poll(); });
+  }
+
+  let polling = false;
+  async function poll() {
+    if (polling || !A.session || !A.server || document.visibilityState !== 'visible' || loading || saving || pendingOps.length) return;
+    polling = true;
+    try {
+      const r = await api('ping');
+      if (r.ok && r.data.ver && r.data.ver !== A.server.ver) await load();
+    } catch (e) {
+      /* ננסה שוב בבדיקה הבאה */
+    } finally {
+      polling = false;
+    }
   }
 
   window.AdminApp = { start, A };

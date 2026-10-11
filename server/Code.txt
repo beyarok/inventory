@@ -1202,10 +1202,21 @@ function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 
+// ---------- "השתנה משהו?" ----------
+// מספר גרסה שמתעדכן בכל שינוי. המסכים שואלים עליו כל כמה שניות – שאלה זולה, בלי לקרוא את הגיליון,
+// ומושכים את כל הנתונים רק כשהוא השתנה.
+function dataVersion_() {
+  return PropertiesService.getScriptProperties().getProperty('DATA_VERSION') || '0';
+}
+function bumpVersion_() {
+  PropertiesService.getScriptProperties().setProperty('DATA_VERSION', Date.now() + '-' + Math.floor(Math.random() * 1e6));
+}
+
 const FIELD_ACTIONS = {
   'field.bootstrap': (req, me) => fieldBootstrap_(me),
   'field.submit': (req, me) => {
     const out = withLock_(() => submitBatch_(req.movements || [], me));
+    if (out.results.some(r => r.ok && r.id)) bumpVersion_();
     // withBoot: מחזירים גם את כל הנתונים המעודכנים – הטלפון לא צריך פנייה נוספת לרענון
     if (req.withBoot) {
       Model.reset();
@@ -1213,7 +1224,11 @@ const FIELD_ACTIONS = {
     }
     return out;
   },
-  'field.undo': (req, me) => withLock_(() => reverseMovement_(req.movementId, me, false)),
+  'field.undo': (req, me) => {
+    const out = withLock_(() => reverseMovement_(req.movementId, me, false));
+    bumpVersion_();
+    return out;
+  },
 };
 
 const ADMIN_ACTIONS = {
@@ -1243,12 +1258,14 @@ const ADMIN_READ_ONLY = ['admin.bootstrap', 'admin.order.pdf', 'admin.project.cl
 
 function route_(req) {
   const action = String(req.action || '');
+  if (action === 'ping') return { ver: dataVersion_() };
   if (action === 'admin.login') return adminLogin_(req.idToken);
   if (FIELD_ACTIONS[action]) return FIELD_ACTIONS[action](req, fieldPerson_(req.token));
   if (ADMIN_ACTIONS[action]) {
     const me = adminPerson_(req.session);
     if (ADMIN_READ_ONLY.indexOf(action) >= 0) return ADMIN_ACTIONS[action](req, me);
     const result = withLock_(() => ADMIN_ACTIONS[action](req, me));
+    if (action !== 'admin.backup.now') bumpVersion_();
     // withBoot: מחזירים מיד גם את כל הנתונים המעודכנים – פנייה אחת לשרת במקום שתיים
     if (req.withBoot) {
       Model.reset();
@@ -1276,6 +1293,7 @@ function submitBatch_(movements, me) {
 
 // מה שהעובד צריך כדי לעבוד: רשימות, מלאי, ומה רשום עליו
 function fieldBootstrap_(me) {
+  const ver = dataVersion_(); // נקרא לפני הנתונים: שינוי שקורה תוך כדי יזוהה בבדיקה הבאה
   const pick = (rows, keys) => rows.map(o => {
     const c = {};
     keys.forEach(k => { c[k] = o[k]; });
@@ -1299,6 +1317,7 @@ function fieldBootstrap_(me) {
       .map(l => ({ id: l.id, orderId: l.orderId, itemId: l.itemId, qtyBuy: l.qtyBuy, buyUnitQty: l.buyUnitQty, received: received[l.id] || 0 })),
     personal: fieldPersonal_(me),
     serverTime: now_(),
+    ver,
   };
 }
 
@@ -1320,6 +1339,7 @@ function fieldPersonal_(me) {
 // ---------- מנהל ----------
 
 function adminBootstrap_(me) {
+  const ver = dataVersion_();
   const tables = {};
   ['Items', 'Units', 'Locations', 'ContainerProjects', 'People', 'Projects', 'Suppliers', 'Movements',
     'UnknownItems', 'Orders', 'OrderLines', 'Prices'].forEach(name => {
@@ -1334,6 +1354,7 @@ function adminBootstrap_(me) {
     receivedByLine: Model.receivedByLine(),
     settings: Db.settings(),
     serverTime: now_(),
+    ver,
     stamp: Date.now(), // לסדר תשובות בדפדפן: תשובה ישנה לא דורסת חדשה
   };
 }

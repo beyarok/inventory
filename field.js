@@ -910,6 +910,20 @@
     }
   }
 
+  let polling = false;
+  async function poll() {
+    if (polling || S.flushing || S.queue.length || !S.data || document.visibilityState !== 'visible') return;
+    polling = true;
+    try {
+      const r = await api('ping');
+      if (r.ok && r.data.ver && r.data.ver !== S.data.ver) await refresh();
+    } catch (e) {
+      /* ננסה שוב בבדיקה הבאה */
+    } finally {
+      polling = false;
+    }
+  }
+
   // ---------- הפעלה ----------
   function start() {
     if (!S.token) { S.fatal = TX.noLink; render(); return; }
@@ -926,9 +940,10 @@
     // חזרה לאפליקציה: שולחים מיד, ומרעננים אם עברו יותר מדקה
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState !== 'visible') return;
-      if (S.queue.length) { retryMs = 0; flush(); } else if (Date.now() - lastRefresh > 60000) refresh();
+      if (S.queue.length) { retryMs = 0; flush(); } else poll();
     });
-    setInterval(() => { if (!S.queue.length && document.visibilityState === 'visible' && cur().v === 'home') refresh(); }, 120000);
+    // כל 20 שניות: "השתנה משהו?" – רק אם כן מושכים את כל הנתונים (פריט חדש, הזמנה חדשה, מלאי שהשתנה)
+    setInterval(poll, 20000);
     if ('serviceWorker' in navigator && !window.DEMO_HANDLE) navigator.serviceWorker.register('sw.js').catch(() => {});
   }
 
