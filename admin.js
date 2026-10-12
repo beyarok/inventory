@@ -335,7 +335,8 @@
       '<div class="shell"><aside class="side" id="side"><div class="brand">' + ICON.leaf + esc(TA.appName) + '</div><nav class="nav">' +
       SECTIONS.map(s => '<button class="' + (A.section === s ? 'on' : '') + '" data-a="section" data-s="' + s + '">' + ICON[s] +
         esc(TA.menu[s]) + (badge[s] ? '<span class="badge">' + badge[s] + '</span>' : '') + '</button>').join('') +
-      '</nav>' + fieldShortcut() + '<div class="who"><span>' + esc(A.d.me.name) + '</span><button data-a="logout">' + esc(TA.logout) + '</button></div></aside>' +
+      '</nav>' + (window.INSTALL_PROMPT ? '<button class="fieldlink" data-a="install">' + ICON.plus + esc(TA.installApp) + '</button>' : '') +
+      fieldShortcut() + '<div class="who"><span>' + esc(A.d.me.name) + '</span><button data-a="logout">' + esc(TA.logout) + '</button></div></aside>' +
       '<main class="main" id="main">' + (VIEW[A.section] || VIEW.soon)(dg) + '</main></div>';
     afterRender();
   }
@@ -2066,6 +2067,16 @@
       bg.addEventListener('click', ev => { if (ev.target.closest('[data-close]')) closeModal(); });
     }
   };
+  // התקנה כאפליקציה במחשב (Chrome / Edge)
+  H.install = async () => {
+    const p = window.INSTALL_PROMPT;
+    if (!p) return;
+    p.prompt();
+    try { await p.userChoice; } catch (e) { /* */ }
+    window.INSTALL_PROMPT = null;
+    safeRender();
+  };
+  window.addEventListener('inv:installable', () => safeRender());
   // מנהל: קישור למסך השטח (כדי לדווח מהטלפון כמו עובד)
   H.copyFieldLink = async el => {
     const p = A.ix.people[el.dataset.id];
