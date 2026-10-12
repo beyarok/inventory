@@ -6,6 +6,8 @@
 <meta name="theme-color" content="#4A3524">
 <title>ניהול מלאי</title>
 <link rel="icon" href="../icons/icon.svg" type="image/svg+xml">
+<link rel="manifest" href="admin.webmanifest">
+<link rel="apple-touch-icon" href="../icons/icon-180.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Assistant:wght@400;600&display=swap" rel="stylesheet">
@@ -22,6 +24,8 @@
 </script>
 <script>
 (async () => {
+  // מאפשר "התקנה" כאפליקציה במחשב (אייקון וחלון משלו)
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   const app = document.getElementById('app');
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
   app.innerHTML = '<div class="center muted">טוען…</div>';

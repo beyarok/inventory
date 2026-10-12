@@ -1,6 +1,6 @@
 // גרסת Firebase: שומר את קבצי הדף בטלפון (כולל ספריית Firebase), כדי שייפתח מיד – גם בלי קליטה.
 // בכל עדכון של הדף מעלים את מספר הגרסה.
-const VERSION = 'field2-7';
+const VERSION = 'field2-8';
 const FB = 'https://www.gstatic.com/firebasejs/12.4.0/';
 const FILES = ['./', 'index.html', 'config.js', 'core.js', 'engine.js', 'manifest.webmanifest',
   '../field.css', '../field.js', '../texts.js', '../icons/icon.svg',
@@ -28,6 +28,8 @@ self.addEventListener('fetch', e => {
     return;
   }
   if (url.origin !== location.origin) return;
+  // מסך הניהול טוען קבצים עם ?v=… (תמיד הגרסה האחרונה) – לא שומרים אותם, כדי שהזיכרון לא יתמלא
+  if (/[?&]v=/.test(url.search)) return;
   // קבצי הדף: קודם מהרשת (כדי לקבל עדכונים), ואם אין קליטה – מהשמור
   e.respondWith(
     fetch(e.request, { cache: 'no-cache' }).then(res => {
