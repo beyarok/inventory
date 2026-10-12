@@ -335,7 +335,7 @@
       '<div class="shell"><aside class="side" id="side"><div class="brand">' + ICON.leaf + esc(TA.appName) + '</div><nav class="nav">' +
       SECTIONS.map(s => '<button class="' + (A.section === s ? 'on' : '') + '" data-a="section" data-s="' + s + '">' + ICON[s] +
         esc(TA.menu[s]) + (badge[s] ? '<span class="badge">' + badge[s] + '</span>' : '') + '</button>').join('') +
-      '</nav><div class="who"><span>' + esc(A.d.me.name) + '</span><button data-a="logout">' + esc(TA.logout) + '</button></div></aside>' +
+      '</nav>' + fieldShortcut() + '<div class="who"><span>' + esc(A.d.me.name) + '</span><button data-a="logout">' + esc(TA.logout) + '</button></div></aside>' +
       '<main class="main" id="main">' + (VIEW[A.section] || VIEW.soon)(dg) + '</main></div>';
     afterRender();
   }
@@ -1273,7 +1273,9 @@
       (rows.length ? rows.map(r => '<tr' + (r.archived ? ' class="arch"' : '') + '>' + fields.map(f => '<td>' + cell(r, f) + '</td>').join('') +
         '<td><div class="btns" style="justify-content:flex-end">' + (r.archived
           ? '<span class="tag">' + esc(TA.archivedTag) + '</span><button class="btn sm" data-a="listRestore" data-id="' + r.id + '">' + esc(TA.restore) + '</button>'
-          : (ent === 'People' && r.token ? '<button class="btn sm" data-a="copyLink" data-id="' + r.id + '">' + esc(TA.copyLink) + '</button><button class="btn sm" data-a="newLink" data-id="' + r.id + '">' + esc(TA.newLink) + '</button>' : '') +
+          : (ent === 'People' && r.token ? '<button class="btn sm" data-a="copyLink" data-id="' + r.id + '">' + esc(TA.copyLink) + '</button>' +
+            (r.role === 'admin' && window.ENGINE ? '<button class="btn sm" data-a="copyFieldLink" data-id="' + r.id + '">' + esc(TA.copyFieldLink) + '</button>' : '') +
+            '<button class="btn sm" data-a="newLink" data-id="' + r.id + '">' + esc(TA.newLink) + '</button>' : '') +
             '<button class="btn sm" data-a="listEdit" data-id="' + r.id + '">' + esc(TA.edit) + '</button>' +
             '<button class="btn sm danger" data-a="listArchive" data-id="' + r.id + '">' + esc(TA.remove) + '</button>') +
         '</div></td></tr>').join('') : '<tr><td colspan="9" class="muted">' + esc(TA.emptyList) + '</td></tr>') +
@@ -1281,6 +1283,12 @@
   };
 
   // קישור אישי: עובד – למסך השטח; מנהל (בגרסת Firebase) – למסך הניהול
+  // מנהל בשטח: מסך השטח עם הקישור האישי שלו (הדיווחים נרשמים על שמו)
+  function fieldShortcut() {
+    const me = window.ENGINE && A.ix && A.ix.people[A.d.me.id];
+    if (!me || !me.token) return '';
+    return '<a class="fieldlink" href="' + esc(fieldUrl(me.token)) + '">' + ICON.leaf + esc(TA.fieldScreen) + '</a>';
+  }
   function personUrl(p) {
     if (p.role === 'admin' && window.ENGINE) return new URL('admin.html', location.href).href.split('?')[0] + '?k=' + p.token;
     return fieldUrl(p.token);
@@ -2054,6 +2062,19 @@
     } catch (e) {
       // אין גישה ללוח – מציגים את הקישור להעתקה ידנית
       const bg = modal('<h3>' + esc(TA.copyLink + ' · ' + p.name) + '</h3><input class="in" readonly value="' + esc(url) + '" onfocus="this.select()">' +
+        '<div class="foot"><button class="btn" data-close="1">' + esc(TA.close) + '</button></div>');
+      bg.addEventListener('click', ev => { if (ev.target.closest('[data-close]')) closeModal(); });
+    }
+  };
+  // מנהל: קישור למסך השטח (כדי לדווח מהטלפון כמו עובד)
+  H.copyFieldLink = async el => {
+    const p = A.ix.people[el.dataset.id];
+    const url = fieldUrl(p.token);
+    try {
+      await navigator.clipboard.writeText(url);
+      toast(TA.linkCopied);
+    } catch (e) {
+      const bg = modal('<h3>' + esc(TA.copyFieldLink + ' · ' + p.name) + '</h3><input class="in" readonly value="' + esc(url) + '" onfocus="this.select()">' +
         '<div class="foot"><button class="btn" data-close="1">' + esc(TA.close) + '</button></div>');
       bg.addEventListener('click', ev => { if (ev.target.closest('[data-close]')) closeModal(); });
     }
