@@ -5,7 +5,8 @@
 //   c/{טבלה~0001}  – חלק מטבלה: { t, seq, rev, pub, data: JSON {cols, rows} }. טבלה גדולה מתחלקת לכמה חלקים.
 //   c/_meta         – { rev, chunks: {id: rev} } – מספר הגרסה של כל המאגר. כל שמירה מעלה אותו ב-1.
 //   tokens/{token}  – { personId, active } – הקישורים האישיים של העובדים (לא נשמרים בטבלת האנשים)
-//   devices/{uid}   – { token, personId } – טלפון שנכנס עם קישור אישי
+//   devices/{uid}   – { token, personId } – טלפון שנכנס עם קישור אישי של עובד
+//   devices/{uid}_a – אותו דבר לקישור אישי של מנהל (admin.html?k=...)
 //   admins/{email}  – { personId } – מי מנהל (לפי זה כללי האבטחה מאפשרים גישה)
 //
 // כל שמירה = טרנזקציה: קוראים את _meta; אם מישהו שמר בינתיים – מביאים את החלקים שהשתנו ומריצים מחדש.
@@ -55,6 +56,8 @@
     user: null,
     token: '',         // שטח: הקישור האישי
     personId: '',      // שטח: מי העובד
+    adminKey: '',      // מנהל עם קישור אישי (במקום כניסה עם גוגל)
+    adminPersonId: '',
     authError: '',
     raw: {},           // מה שהגיע מהמאזין: id -> נתוני המסמך
     rev: -1,           // הגרסה המקומית העקבית האחרונה
@@ -280,6 +283,10 @@
     return p;
   };
   const myAdminRow = () => {
+    if (st.adminPersonId) {
+      const p = Db.byId('People', st.adminPersonId);
+      return p && p.role === 'admin' && !p.archived ? p : null;
+    }
     const email = st.user && !st.user.isAnonymous && String(st.user.email || '').toLowerCase();
     return email && Db.all('People').find(x => x.role === 'admin' && String(x.email).toLowerCase().trim() === email);
   };
@@ -289,7 +296,7 @@
     return { session: 'fb', person: { id: p.id, name: p.name, email: p.email } };
   };
   window.adminPerson_ = () => {
-    if (!st.user || st.user.isAnonymous) authError_(MSG.sessionExpired);
+    if (!st.user || (st.user.isAnonymous && !st.adminPersonId)) authError_(MSG.sessionExpired);
     const p = myAdminRow();
     if (!p) authError_(MSG.notAdmin);
     return p;
@@ -328,7 +335,7 @@
     try {
       await withTimeout(st.initP, 20000);
       if (req.action === 'ping') return { ok: true, data: { ver: String(st.rev) } };
-      if (st.authError) return { ok: false, error: st.mode === 'field' ? MSG.badLink : MSG.notAdmin, code: 'AUTH' };
+      if (st.authError) return { ok: false, error: (st.mode === 'field' || st.adminKey) ? MSG.badLink : MSG.notAdmin, code: 'AUTH' };
       if (!st.user) return { ok: false, error: MSG.sessionExpired, code: 'AUTH' };
       if (req.action === 'admin.backup.now') return await backupViaScript(req);
       if (READ_ONLY.indexOf(req.action) >= 0) {
@@ -343,7 +350,7 @@
     } catch (e) {
       if (e && e.code === 'AUTH') return { ok: false, error: e.message, code: 'AUTH' };
       if (e && e.empty) return { ok: false, error: 'המערכת עוד לא הוקמה.', code: 'AUTH' };
-      if (e && e.code === 'permission-denied') return { ok: false, error: st.mode === 'field' ? MSG.badLink : MSG.notAdmin, code: 'AUTH' };
+      if (e && e.code === 'permission-denied') return { ok: false, error: (st.mode === 'field' || st.adminKey) ? MSG.badLink : MSG.notAdmin, code: 'AUTH' };
       if (e && e.userMessage) return { ok: false, error: e.userMessage };
       console.error('engine', req.action, e);
       throw offlineError(); // רשת / שרת – הדף ינסה שוב
@@ -435,7 +442,7 @@
     const wantTokens = {};
     const wantAdmins = {};
     t.rows.forEach(p => {
-      if (p.token) wantTokens[p.token] = { personId: p.id, active: !p.archived };
+      if (p.token) wantTokens[p.token] = { personId: p.id, active: !p.archived, admin: p.role === 'admin' };
       const email = String(p.email || '').toLowerCase().trim();
       if (p.role === 'admin' && !p.archived && email) wantAdmins[email] = { personId: p.id };
     });
@@ -448,6 +455,21 @@
     diff(wantTokens, st.tokens, out.tokens);
     diff(wantAdmins, st.admins, out.admins);
     return out;
+  }
+
+  // קישורים שנוצרו לפני שהיה סימון "מנהל" – מסמנים פעם אחת (כדי שקישור אישי של מנהל יעבוד)
+  let tokenFixDone = false;
+  function fixTokenFlags() {
+    if (tokenFixDone || !st.tokensLoaded || st.rev < 0 || st.readyState !== 'ok') return;
+    tokenFixDone = true;
+    const F = st.fb;
+    Db.begin(baseFromLocal());
+    Db.all('People', { includeArchived: true }).forEach(p => {
+      const t = p.token && st.tokens[p.token];
+      if (t && !!t.admin !== (p.role === 'admin')) {
+        F.setDoc(F.doc(st.db, 'tokens', p.token), { admin: p.role === 'admin' }, { merge: true }).catch(e => console.error('fix token', e));
+      }
+    });
   }
 
   // ---------- מאזינים: כל שינוי של מישהו אחר מגיע תוך שנייה ----------
@@ -474,6 +496,7 @@
     }
     if (st.readyState === 'failed') newReady(); // למשל: היה ריק, ועכשיו הוקם
     st.readyFns.resolve();
+    if (st.mode === 'admin') fixTokenFlags();
     changed();
   }
 
@@ -504,6 +527,8 @@
     st.unsub.push(F.onSnapshot(F.collection(st.db, 'tokens'), s => {
       st.tokens = {};
       s.forEach(d => { st.tokens[d.id] = d.data(); });
+      st.tokensLoaded = true;
+      fixTokenFlags();
       changed();
     }, listenError));
     st.unsub.push(F.onSnapshot(F.collection(st.db, 'admins'), s => {
@@ -560,35 +585,51 @@
       if (mode === 'field') {
         st.token = new URLSearchParams(location.search).get('t') || '';
         if (!st.user) st.user = (await F.signInAnonymously(st.auth)).user;
-        await registerDevice();
+        await registerDevice(st.token, '');
         if (!st.authError) listenField();
         else st.readyFns.reject(new Error('bad link'));
       } else {
-        if (st.user && st.user.isAnonymous) { await F.signOut(st.auth); st.user = null; }
-        if (st.user) listenAdmin();
+        const params = new URLSearchParams(location.search);
+        const keyKey = (window.STORE_PREFIX || 'inv:') + 'admin:key';
+        if (params.get('k')) { try { localStorage.setItem(keyKey, params.get('k')); } catch (e) { /* */ } }
+        st.adminKey = params.get('k') || (() => { try { return localStorage.getItem(keyKey) || ''; } catch (e) { return ''; } })();
+        if (st.user && !st.user.isAnonymous) {
+          st.adminKey = ''; // מחובר עם גוגל – זה קודם
+          listenAdmin();
+        } else if (st.adminKey) {
+          // קישור אישי של מנהל
+          if (!st.user) st.user = (await F.signInAnonymously(st.auth)).user;
+          await registerDevice(st.adminKey, '_a');
+          if (!st.authError) listenAdmin();
+          else st.readyFns.reject(new Error('bad link'));
+        } else {
+          st.user = null; // משתמש אנונימי של מסך העובד באותו דפדפן – לא מנהל
+        }
       }
     })();
     st.initP.catch(e => console.error('init', e));
     return st.initP;
   }
 
-  async function registerDevice() {
+  // רישום המכשיר עם הקישור האישי (suffix '_a' = קישור של מנהל)
+  async function registerDevice(token, suffix) {
     const F = st.fb;
-    const devRef = F.doc(st.db, 'devices', st.user.uid);
+    const devRef = F.doc(st.db, 'devices', st.user.uid + suffix);
+    const done = personId => { if (suffix) st.adminPersonId = personId; else st.personId = personId; };
     let dev = null;
     try { dev = (await F.getDoc(devRef)).data() || null; } catch (e) { dev = null; }
-    if (dev && dev.token === st.token) { st.personId = dev.personId; return; }
+    if (dev && dev.token === token) { done(dev.personId); return; }
     let t;
     try {
-      t = await F.getDoc(F.doc(st.db, 'tokens', st.token || '-'));
+      t = await F.getDoc(F.doc(st.db, 'tokens', token || '-'));
     } catch (e) {
       if (e && e.code === 'unavailable') throw e;
       st.authError = 'badLink';
       return;
     }
-    if (!t.exists() || !t.data().active) { st.authError = 'badLink'; return; }
-    st.personId = t.data().personId;
-    await F.setDoc(devRef, { token: st.token, personId: st.personId, at: F.serverTimestamp() });
+    if (!t.exists() || !t.data().active || (suffix && !t.data().admin)) { st.authError = 'badLink'; return; }
+    done(t.data().personId);
+    await F.setDoc(devRef, { token, personId: t.data().personId, at: F.serverTimestamp() });
   }
 
   // מנהל: כניסה עם חשבון גוגל
@@ -599,6 +640,8 @@
     provider.setCustomParameters({ prompt: 'select_account' });
     const r = await F.signInWithPopup(st.auth, provider);
     st.user = r.user;
+    st.adminKey = '';
+    st.adminPersonId = '';
     resetData();
     listenAdmin();
     return st.user;
@@ -606,6 +649,11 @@
 
   async function signOut() {
     await st.initP;
+    if (st.adminKey) {
+      try { localStorage.removeItem((window.STORE_PREFIX || 'inv:') + 'admin:key'); } catch (e) { /* */ }
+      st.adminKey = '';
+      st.adminPersonId = '';
+    }
     resetData();
     await st.fb.signOut(st.auth);
     st.user = null;
@@ -667,6 +715,7 @@
   window.ENGINE = {
     init, handle, signIn, signOut, dataState, importOld, startFresh,
     get user() { return st.user; },
+    get keyAdmin() { return !!st.adminPersonId; },
     st,
   };
   window.LOCAL_API = handle;

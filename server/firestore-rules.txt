@@ -1,0 +1,51 @@
+rules_version = '2';
+// כללי האבטחה של גרסת Firebase. מדביקים ב-Firebase Console › Firestore Database › Rules › Publish.
+// מנהל = חשבון גוגל שמופיע ב-admins, או מכשיר שנרשם עם קישור אישי של מנהל (devices/{uid}_a + tokens עם admin).
+// עובד שטח = טלפון שנרשם עם קישור אישי פעיל (devices/{uid} + tokens).
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function hasEmail() { return signedIn() && 'email' in request.auth.token && request.auth.token.email_verified == true; }
+    function email() { return request.auth.token.email.lower(); }
+    function isGoogleAdmin() { return hasEmail() && exists(/databases/$(database)/documents/admins/$(email())); }
+    function adminDevice() { return get(/databases/$(database)/documents/devices/$(request.auth.uid + '_a')).data; }
+    function isLinkAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/devices/$(request.auth.uid + '_a'))
+        && get(/databases/$(database)/documents/tokens/$(adminDevice().token)).data.active == true
+        && get(/databases/$(database)/documents/tokens/$(adminDevice().token)).data.admin == true;
+    }
+    function isAdmin() { return isGoogleAdmin() || isLinkAdmin(); }
+    function device() { return get(/databases/$(database)/documents/devices/$(request.auth.uid)).data; }
+    function isField() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/devices/$(request.auth.uid))
+        && get(/databases/$(database)/documents/tokens/$(device().token)).data.active == true;
+    }
+    // הקמה ראשונה: כל עוד אין נתונים בכלל, מי שנכנס עם חשבון גוגל יכול להקים
+    function firstSetup() { return hasEmail() && !exists(/databases/$(database)/documents/c/_meta); }
+
+    match /c/{id} {
+      allow get: if id == '_meta' && signedIn() && resource == null;
+      allow read: if isAdmin() || (isField() && resource.data.pub == true);
+      allow write: if isAdmin() || firstSetup()
+        || (isField() && (id == '_meta' || id.matches('(Movements|UnknownItems|Orders)~[0-9]+')));
+    }
+    match /tokens/{t} {
+      allow get: if signedIn();
+      allow list: if isAdmin();
+      allow write: if isAdmin() || firstSetup();
+    }
+    function tokenOf(t) { return get(/databases/$(database)/documents/tokens/$(t)).data; }
+    match /devices/{id} {
+      allow read: if signedIn() && (id == request.auth.uid || id == request.auth.uid + '_a' || isAdmin());
+      allow create, update: if signedIn() && tokenOf(request.resource.data.token).active == true
+        && (id == request.auth.uid || (id == request.auth.uid + '_a' && tokenOf(request.resource.data.token).admin == true));
+    }
+    match /admins/{e} {
+      allow get: if hasEmail() && (email() == e || isAdmin());
+      allow list: if isAdmin();
+      allow write: if isAdmin() || firstSetup();
+    }
+  }
+}

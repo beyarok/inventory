@@ -30,6 +30,8 @@
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
   app.innerHTML = '<div class="center muted">טוען…</div>';
   await ENGINE.init('admin');
+  // קישור אישי של מנהל: נכנסים ישר, בלי כניסה עם גוגל
+  if (ENGINE.keyAdmin) { AdminApp.A.session = 'fb'; return AdminApp.start(); }
   if (!ENGINE.user || await ENGINE.dataState() !== 'empty') return AdminApp.start();
 
   // ---------- הקמה ראשונה ----------

@@ -809,7 +809,10 @@ function validate_(entity, data, existing, name) {
   if (entity === 'People') {
     const role = data.role !== undefined ? data.role : existing && existing.role;
     if (['field', 'admin'].indexOf(role) < 0) userError_(MSG.missing + 'תפקיד');
-    if (role === 'admin' && !(data.email || (existing && existing.email))) userError_(MSG.missing + 'מייל של חשבון גוגל');
+    // מייל לא חובה (מנהל יכול להיכנס בקישור אישי). צריך אותו רק כדי לקבל את מייל הסיכום.
+    const alerts = data.alerts !== undefined ? data.alerts : existing && existing.alerts;
+    const email = data.email !== undefined ? data.email : existing && existing.email;
+    if (role === 'admin' && alerts && !email) userError_(MSG.missing + 'מייל (כדי לקבל את מייל הסיכום)');
     if (existing && existing.role === 'admin' && role !== 'admin' && adminCount_() <= 1) userError_(MSG.lastAdmin);
   }
 }

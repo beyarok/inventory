@@ -4,7 +4,6 @@
   "short_name": "ניהול מלאי",
   "lang": "he",
   "dir": "rtl",
-  "start_url": "admin.html",
   "scope": "./",
   "display": "standalone",
   "background_color": "#FAF8F3",

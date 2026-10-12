@@ -1280,6 +1280,11 @@
       '</table></div>';
   };
 
+  // קישור אישי: עובד – למסך השטח; מנהל (בגרסת Firebase) – למסך הניהול
+  function personUrl(p) {
+    if (p.role === 'admin' && window.ENGINE) return new URL('admin.html', location.href).href.split('?')[0] + '?k=' + p.token;
+    return fieldUrl(p.token);
+  }
   function fieldUrl(token) {
     const base = (window.APP_CONFIG && window.APP_CONFIG.fieldUrl) || new URL('index.html', location.href).href;
     return base + (base.indexOf('?') >= 0 ? '&' : '?') + 't=' + token;
@@ -1978,7 +1983,7 @@
     optimistic('admin.save', { entity: 'People', record: { id, alerts } }, d => { d.tables.People.find(p => p.id === id).alerts = alerts; });
   };
   H.addAdmin = () => formBox(TA.sAddAdmin, [{ k: 'name', label: TA.fName }, { k: 'email', label: TA.fEmail }, { k: 'alerts', label: TA.fAlerts, type: 'check' }],
-    { alerts: true }, v => saveQuiet('People', Object.assign({ role: 'admin' }, v)));
+    { alerts: false }, v => saveQuiet('People', Object.assign({ role: 'admin' }, v)));
   // התראה לדוגמה בטלפון (ניסיון – עוד לא התראות אמיתיות)
   H.testNotify = async () => {
     if (!('Notification' in window) || !('serviceWorker' in navigator)) return toast(TA.notifyUnsupported, true);
@@ -2042,7 +2047,7 @@
   H.listRestore = el => restore(A.listTab, el.dataset.id);
   H.copyLink = async el => {
     const p = A.ix.people[el.dataset.id];
-    const url = fieldUrl(p.token);
+    const url = personUrl(p);
     try {
       await navigator.clipboard.writeText(url);
       toast(TA.linkCopied);
