@@ -10,7 +10,8 @@
   const fmt = (s, v) => String(s).replace(/\{(\w+)\}/g, (m, k) => (v && v[k] !== undefined ? v[k] : m));
   const num = n => Number(n || 0).toLocaleString('he-IL');
   const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random().toString(16).slice(2));
-  const norm = s => String(s || '').toLowerCase().replace(/["'״׳`]/g, '').replace(/\s+/g, ' ').trim();
+  // חיפוש: בלי גרשיים, ו-"וו" = "ו" (זווית / זוית)
+  const norm = s => String(s || '').toLowerCase().replace(/["'״׳`]/g, '').replace(/וו/g, 'ו').replace(/\s+/g, ' ').trim();
 
   const svg = p => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + p + '</svg>';
   const ICON = {

@@ -10,7 +10,8 @@
     .replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const fmt = (s, v) => String(s).replace(/\{(\w+)\}/g, (m, k) => (v && v[k] !== undefined ? v[k] : m));
   const num = n => Number(n || 0).toLocaleString('he-IL', { maximumFractionDigits: 2 });
-  const norm = s => String(s || '').toLowerCase().replace(/["'״׳`]/g, '').replace(/\s+/g, ' ').trim();
+  // חיפוש: בלי גרשיים, ו-"וו" = "ו" (זווית / זוית)
+  const norm = s => String(s || '').toLowerCase().replace(/["'״׳`]/g, '').replace(/וו/g, 'ו').replace(/\s+/g, ' ').trim();
   const svg = p => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + p + '</svg>';
   const ICON = {
     leaf: svg('<path d="M5 19c0-8 5-13 14-14 0 9-5 14-13 14"/><path d="M5 19c3-4 6-7 10-9"/>'),

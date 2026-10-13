@@ -66,7 +66,7 @@
     const rows = data.lines.map((l, i) => {
       const n = net(l.list, l.disc);
       total += n * l.qty;
-      return '<tr><td>' + (i + 1) + '</td><td>' + esc(l.name) + '</td><td class="muted small">' + esc(l.code) + '</td><td>' + esc(l.unit) + '</td>' +
+      return '<tr><td>' + (i + 1) + '</td><td>' + esc(l.name) + (l.aliases && l.aliases.length ? '<div class="small muted">כינוי: ' + esc(l.aliases.join(', ')) + '</div>' : '') + '</td><td class="muted small">' + esc(l.code) + '</td><td>' + esc(l.unit) + '</td>' +
         '<td class="r">' + Number(l.qty).toLocaleString('he-IL') + '</td><td class="r">' + money(l.list) + '</td><td class="r">' + (l.disc ? l.disc + '%' : '') + '</td>' +
         '<td class="r"><b>' + money(n) + '</b></td><td class="r">' + money(n * l.qty) + '</td>' +
         '<td>' + (existing[l.name] ? '<span class="tag">קיים</span>' : '<span class="tag new">חדש</span>') + '</td></tr>';
@@ -100,7 +100,7 @@
     try {
       // 1. פריטים חסרים – בעץ הראשי
       let existing = rootItemsByName(boot.data);
-      const toCreate = data.lines.filter(l => !existing[l.name]).map(l => ({ name: l.name, unitName: l.unit }));
+      const toCreate = data.lines.filter(l => !existing[l.name]).map(l => ({ name: l.name, unitName: l.unit, aliases: (l.aliases || []).join(';') }));
       if (toCreate.length) {
         const r = await api({ action: 'admin.items.quickAdd', parentId: '', rows: toCreate });
         if (!r.ok) return fail('יצירת הפריטים נכשלה: ' + r.error);
