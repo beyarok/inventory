@@ -806,7 +806,7 @@
 
   function orderTotals(o, lines) {
     const vat = (o.vatRate || Number(A.d.settings.vatRate) || 0) / 100;
-    const total = lines.reduce((s, l) => s + (l.unitPriceBuy === null || l.unitPriceBuy === '' ? 0 : l.unitPriceBuy * l.qtyBuy), 0);
+    const total = lines.reduce((s, l) => s + (l.unitPriceBuy === null || l.unitPriceBuy === '' ? 0 : l.unitPriceBuy * l.qtyBuy), 0) * (1 - (Number(o.extraDiscount) || 0) / 100);
     const before = o.pricesIncludeVat ? total / (1 + vat) : total;
     return { before, after: o.pricesIncludeVat ? total : total * (1 + vat) };
   }
@@ -1754,7 +1754,7 @@
     let d = A.drafts[o.id];
     if (!d) {
       d = A.drafts[o.id] = {
-        supplierId: o.supplierId, destId: o.destId, vat: !!o.pricesIncludeVat, note: o.note || '',
+        supplierId: o.supplierId, destId: o.destId, vat: !!o.pricesIncludeVat, note: o.note || '', extraDiscount: Number(o.extraDiscount) || 0,
         lines: A.d.tables.OrderLines.filter(l => l.orderId === o.id && l.qtyBuy > 0).map(l => ({
           id: l.id, itemId: l.itemId, qtyBuy: l.qtyBuy,
           listPrice: l.listPrice !== null && l.listPrice !== '' && l.listPrice !== undefined ? l.listPrice : (l.unitPriceBuy === null ? '' : l.unitPriceBuy),
@@ -1765,7 +1765,7 @@
     return d;
   }
   const draftPayload = (o, d) => ({
-    id: o.id, supplierId: d.supplierId, destId: d.destId, pricesIncludeVat: d.vat, note: d.note,
+    id: o.id, supplierId: d.supplierId, destId: d.destId, pricesIncludeVat: d.vat, note: d.note, extraDiscount: Number(d.extraDiscount) || 0,
     lines: d.lines.map(l => ({ id: l.id, itemId: l.itemId, qtyBuy: Number(l.qtyBuy) || 0, listPrice: l.listPrice === '' ? null : Number(l.listPrice), discount: Number(l.discount) || 0, saveToList: !!l.saveToList })),
   });
   let draftTimer = null;
@@ -1842,6 +1842,9 @@
         '<td><b>' + (n === null ? '' : money(n)) + '</b></td><td>' + (sum ? money(sum) : '') + '</td><td>' + listCell + '</td>' +
         '<td><button class="btn sm danger" data-a="olRemove" data-key="' + i + '" title="' + esc(l.sel && nSel('ol') > 1 ? TA.removeSelected : TA.remove) + '">✕</button></td></tr>';
     }).join('');
+    const sub = total;
+    const extra = Number(d.extraDiscount) || 0;
+    total = total * (1 - extra / 100);
     const before = d.vat ? total / (1 + vat) : total;
     const after = d.vat ? total : total * (1 + vat);
     return '<button class="link" data-a="orderBack" style="margin-bottom:8px">' + esc(TA.backToList) + '</button>' +
@@ -1850,13 +1853,15 @@
       '<label class="muted">' + esc(TA.fSupplier) + '</label><select class="in" data-od="supplierId" style="max-width:220px">' + sups.map(s => '<option value="' + s.id + '"' + (s.id === d.supplierId ? ' selected' : '') + '>' + esc(s.name) + '</option>').join('') + '</select>' +
       '<button class="link" data-a="openSupplier" data-id="' + d.supplierId + '">' + esc(TA.supplierCard) + '</button>' +
       '<label class="muted">' + esc(TA.fDest) + '</label><select class="in" data-od="destId" style="max-width:180px">' + dests.map(l => '<option value="' + l.id + '"' + (l.id === d.destId ? ' selected' : '') + '>' + esc(l.name) + '</option>').join('') + '</select>' +
-      '<label class="small"><input type="checkbox" data-od="vat"' + (d.vat ? ' checked' : '') + '> ' + esc(TA.fIncVat) + '</label></div>' +
+      '<label class="small"><input type="checkbox" data-od="vat"' + (d.vat ? ' checked' : '') + '> ' + esc(TA.fIncVat) + '</label>' +
+      '<label class="muted">' + esc(TA.fExtraDiscount) + '</label><span style="white-space:nowrap"><input class="in pct" type="number" min="0" max="100" step="0.5" data-od="extraDiscount" value="' + esc(d.extraDiscount) + '">%</span></div>' +
       '<div class="inline" style="margin-top:8px"><input class="in" data-od="note" placeholder="' + esc(TA.fNote) + '" value="' + esc(d.note) + '"></div></div>' +
       selBar('ol') + '<div class="hint" style="margin-bottom:6px">' + esc(TA.draftHint) + '</div>' +
       '<div class="box" style="padding:0;overflow:auto"><table><tr><th>' + allBox('ol') + '</th><th>' + esc(TA.cItem) + '</th><th>' + esc(TA.cQty) + '</th><th>' + esc(TA.cList) + '</th><th>' + esc(TA.cDiscount) + '</th><th>' + esc(TA.cNet) + '</th><th>' + esc(TA.cSum) + '</th><th></th><th></th></tr>' +
       (rows || '<tr><td colspan="9" class="muted">' + esc(TA.noLines) + '</td></tr>') + '</table></div>' +
       '<div class="btns" style="justify-content:space-between;margin:10px 0"><button class="btn" data-a="olAdd">' + ICON.plus + esc(TA.addLine) + '</button>' +
-      '<div style="text-align:left;line-height:1.8">' + esc(TA.beforeVat) + ': <b>' + money(before) + '</b><br>' + esc(fmt(TA.vatLine, { n: o.vatRate || A.d.settings.vatRate })) + ': ' + money(after - before) + '<br>' + esc(TA.afterVat) + ': <b>' + money(after) + '</b></div></div>' +
+      '<div style="text-align:left;line-height:1.8">' + (extra ? esc(TA.linesTotal) + ': ' + money(sub) + '<br>' + esc(fmt(TA.extraLine, { n: extra })) + ': -' + money(sub - total) + '<br>' : '') +
+      esc(TA.beforeVat) + ': <b>' + money(before) + '</b><br>' + esc(fmt(TA.vatLine, { n: o.vatRate || A.d.settings.vatRate })) + ': ' + money(after - before) + '<br>' + esc(TA.afterVat) + ': <b>' + money(after) + '</b></div></div>' +
       '<div class="btns"><button class="btn p" data-a="orderSend">' + esc(TA.markSent) + '</button><button class="btn" data-a="orderPdf">' + esc(TA.supplierDoc) + '</button>' +
       '<button class="btn danger" data-a="orderCancel">' + esc(TA.cancelOrder) + '</button></div>' + orderDocs(o);
   }
@@ -1872,6 +1877,7 @@
       else if (k === 'supplierId') {
         // ספק אחר: המחירים מתמלאים מהמחירון שלו (הכמויות נשארות)
         d.supplierId = t.value;
+        d.extraDiscount = Number((A.ix.sups[t.value] || {}).extraDiscount) || 0;
         d.lines.forEach(l => { const p = prefill(d.supplierId, l.itemId); if (p.listPrice !== '') { l.listPrice = p.listPrice; l.discount = p.discount; } l.saveToList = false; });
       } else d[k] = t.value;
       scheduleDraftSave(A.orderId);
@@ -1919,7 +1925,7 @@
   H.supTab = el => { A.supTab = el.dataset.v; render(); };
   const SUP_FIELDS = () => [
     { k: 'name', label: TA.fName }, { k: 'phone', label: TA.fPhone }, { k: 'contact', label: TA.fContact }, { k: 'email', label: TA.fEmail2 },
-    { k: 'vatId', label: TA.fVatId }, { k: 'address', label: TA.fAddress }, { k: 'note', label: TA.fNote },
+    { k: 'vatId', label: TA.fVatId }, { k: 'address', label: TA.fAddress }, { k: 'extraDiscount', label: TA.fSupDiscount }, { k: 'note', label: TA.fNote },
   ];
   H.supEdit = () => {
     const s = A.ix.sups[A.supId];

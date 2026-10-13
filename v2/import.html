@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#4A3524">
+<title>ייבוא הזמנה</title>
+<link rel="icon" href="../icons/icon.svg" type="image/svg+xml">
+<link href="https://fonts.googleapis.com/css2?family=Assistant:wght@400;600&display=swap" rel="stylesheet">
+<script>window.V = '?v=' + Date.now(); document.write('<link rel="stylesheet" href="../admin.css' + V + '">');</script>
+<style>
+  .main { max-width: 1100px; margin: 0 auto; }
+  td.r, th.r { text-align: left; }
+  .tag.new { background: var(--green-bg); color: var(--green-dark); }
+  .steps div { padding: 3px 0; }
+</style>
+</head>
+<body>
+<div class="main" id="main"><div class="center muted">טוען…</div></div>
+<script>
+  // בדיקות מקומיות בלבד: ?fake=1 – Firebase מדומה
+  const FAKE = location.hostname === 'localhost' && /[?&]fake=1/.test(location.search);
+  (FAKE ? ['../../tests/fake-firebase.js'] : []).concat(['config.js', '../texts.js', 'core.js', 'engine.js']).forEach(f => document.write('<script src="' + f + V + '"><\/script>'));
+</script>
+<script>
+// ייבוא הזמנה מקובץ (הצעת מחיר של ספק שהוכנה כקובץ): יוצר פריטים חסרים בעץ הראשי, מעדכן את מחירון הספק,
+// ופותח הזמנה בטיוטה. הנתונים מגיעים מקובץ שנבחר במחשב – לא נשמרים באתר.
+(async () => {
+  const main = document.getElementById('main');
+  const esc = s => String(s === null || s === undefined ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  const money = n => '₪' + Number(n).toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const net = (l, d) => Math.round(Number(l) * (1 - (Number(d) || 0) / 100) * 100) / 100;
+  const api = req => window.LOCAL_API(Object.assign({ session: 'fb' }, req));
+  await ENGINE.init('admin');
+  let boot = await api({ action: 'admin.bootstrap' });
+  if (!boot.ok) {
+    main.innerHTML = '<div class="box" style="margin-top:40px">צריך קודם להיכנס למסך הניהול בדפדפן הזה (כניסה עם גוגל או הקישור האישי), ואז לחזור לכאן.<br><br><a class="link" href="admin.html">למסך הניהול</a></div>';
+    return;
+  }
+  let data = null;
+
+  function rootItemsByName(b) {
+    const m = {};
+    b.tables.Items.filter(i => !i.archived && !i.parentId).forEach(i => { m[i.name.trim()] = i; });
+    return m;
+  }
+
+  function render(msg) {
+    const b = boot.data;
+    let h = '<h1>ייבוא הזמנה מקובץ</h1>';
+    if (!data) {
+      h += '<div class="box"><p>בוחרים את קובץ ההזמנה (‎.json) שהוכן מהצעת המחיר. לפני שמשהו נוצר – רואים הכל כאן.</p>' +
+        '<input type="file" id="file" accept=".json,application/json"></div>';
+      main.innerHTML = h;
+      document.getElementById('file').onchange = async e => {
+        try { data = JSON.parse(await e.target.files[0].text()); render(); } catch (err) { alert('הקובץ לא נקרא: ' + err.message); }
+      };
+      return;
+    }
+    const sups = b.tables.Suppliers.filter(s => !s.archived);
+    const sup = sups.find(s => s.name.trim() === data.supplierName) || sups.find(s => s.name.indexOf(data.supplierName) >= 0);
+    const locs = b.tables.Locations.filter(l => !l.archived && l.type !== 'repair');
+    const dest = locs.find(l => l.name.indexOf(data.destHint) >= 0);
+    const existing = rootItemsByName(b);
+    let total = 0;
+    const rows = data.lines.map((l, i) => {
+      const n = net(l.list, l.disc);
+      total += n * l.qty;
+      return '<tr><td>' + (i + 1) + '</td><td>' + esc(l.name) + '</td><td class="muted small">' + esc(l.code) + '</td><td>' + esc(l.unit) + '</td>' +
+        '<td class="r">' + Number(l.qty).toLocaleString('he-IL') + '</td><td class="r">' + money(l.list) + '</td><td class="r">' + (l.disc ? l.disc + '%' : '') + '</td>' +
+        '<td class="r"><b>' + money(n) + '</b></td><td class="r">' + money(n * l.qty) + '</td>' +
+        '<td>' + (existing[l.name] ? '<span class="tag">קיים</span>' : '<span class="tag new">חדש</span>') + '</td></tr>';
+    }).join('');
+    const after = total * (1 - (data.extraDiscount || 0) / 100);
+    const nNew = data.lines.filter(l => !existing[l.name]).length;
+    h += '<div class="box" style="margin-bottom:12px"><div class="form" style="max-width:640px">' +
+      '<label>ספק</label><select class="in" id="sup">' + sups.map(s => '<option value="' + s.id + '"' + (sup && s.id === sup.id ? ' selected' : '') + '>' + esc(s.name) + '</option>').join('') + '</select>' +
+      '<label>יעד</label><select class="in" id="dest">' + locs.map(l => '<option value="' + l.id + '"' + (dest && l.id === dest.id ? ' selected' : '') + '>' + esc(l.name) + '</option>').join('') + '</select>' +
+      '<label>הנחה נוספת על ההזמנה</label><span>' + (data.extraDiscount || 0) + '%</span>' +
+      '<label>הערה להזמנה</label><span>' + esc(data.note) + '</span></div></div>' +
+      '<div class="box" style="padding:0;overflow:auto"><table><tr><th>#</th><th>פריט (שם במערכת)</th><th>קוד ספק</th><th>יחידה</th><th class="r">כמות</th><th class="r">מחירון</th><th class="r">הנחה</th><th class="r">נטו</th><th class="r">סה"כ</th><th></th></tr>' + rows + '</table></div>' +
+      '<div class="box" style="margin-top:12px;line-height:1.9">' + data.lines.length + ' שורות · ' + nNew + ' פריטים חדשים ייווצרו בעץ הראשי · ' + (data.lines.length - nNew) + ' קיימים<br>' +
+      'סה"כ שורות: ' + money(total) + ' · אחרי הנחה נוספת ' + (data.extraDiscount || 0) + '%: <b>' + money(after) + '</b> (לפני מע"מ)</div>' +
+      '<div class="btns" style="margin-top:12px"><button class="btn p" id="go">צור פריטים, מחירון והזמנה (טיוטה)</button><button class="btn" id="other">קובץ אחר</button></div>' +
+      '<div class="steps box" id="steps" style="margin-top:12px;display:none"></div>' + (msg ? '<div class="err">' + esc(msg) + '</div>' : '');
+    main.innerHTML = h;
+    document.getElementById('other').onclick = () => { data = null; render(); };
+    document.getElementById('go').onclick = run;
+  }
+
+  async function run() {
+    const btn = document.getElementById('go');
+    btn.disabled = true;
+    const supId = document.getElementById('sup').value;
+    const destId = document.getElementById('dest').value;
+    const steps = document.getElementById('steps');
+    steps.style.display = 'block';
+    const say = t => { steps.insertAdjacentHTML('beforeend', '<div>' + esc(t) + '</div>'); };
+    const fail = t => { steps.insertAdjacentHTML('beforeend', '<div class="err">' + esc(t) + '</div>'); btn.disabled = false; };
+    try {
+      // 1. פריטים חסרים – בעץ הראשי
+      let existing = rootItemsByName(boot.data);
+      const toCreate = data.lines.filter(l => !existing[l.name]).map(l => ({ name: l.name, unitName: l.unit }));
+      if (toCreate.length) {
+        const r = await api({ action: 'admin.items.quickAdd', parentId: '', rows: toCreate });
+        if (!r.ok) return fail('יצירת הפריטים נכשלה: ' + r.error);
+        if (r.data.errors && r.data.errors.length) return fail('חלק מהפריטים לא נוצרו: ' + r.data.errors.map(e => toCreate[e.row].name + ' – ' + e.message).join(' · '));
+        say('✓ נוצרו ' + r.data.created.length + ' פריטים');
+      } else say('✓ כל הפריטים כבר קיימים');
+      boot = await api({ action: 'admin.bootstrap' });
+      existing = rootItemsByName(boot.data);
+      const missing = data.lines.filter(l => !existing[l.name]);
+      if (missing.length) return fail('לא נמצאו: ' + missing.map(l => l.name).join(', '));
+      // 2. מחירון הספק
+      const rows = data.lines.filter(l => l.code || l.list).map(l => ({ itemId: existing[l.name].id, code: l.code || '', listPrice: l.list, discount: l.disc || 0 }));
+      const r2 = await api({ action: 'admin.supplierItems.save', supplierId: supId, rows });
+      if (!r2.ok) return fail('עדכון המחירון נכשל: ' + r2.error);
+      say('✓ מחירון הספק עודכן (' + rows.length + ' פריטים)');
+      // 3. הזמנה בטיוטה
+      const r3 = await api({ action: 'admin.order.save', order: {
+        supplierId: supId, destId, pricesIncludeVat: false, note: data.note || '', extraDiscount: data.extraDiscount || 0,
+        lines: data.lines.map(l => ({ itemId: existing[l.name].id, qtyBuy: l.qty, listPrice: l.list, discount: l.disc || 0 })),
+      } });
+      if (!r3.ok) return fail('יצירת ההזמנה נכשלה: ' + r3.error);
+      say('✓ נוצרה הזמנה ' + r3.data.number + ' (טיוטה) – ' + data.lines.length + ' שורות');
+      steps.insertAdjacentHTML('beforeend', '<div style="margin-top:8px"><a class="btn p" href="admin.html">למסך הניהול › הזמנות</a></div>');
+      btn.style.display = 'none';
+    } catch (e) {
+      fail('תקלה: ' + (e.message || e) + '. אפשר לנסות שוב – פריטים שכבר נוצרו לא ייווצרו פעמיים.');
+    }
+  }
+
+  render();
+})();
+</script>
+</body>
+</html>

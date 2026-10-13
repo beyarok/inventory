@@ -23,14 +23,15 @@ const SCHEMA = {
   ContainerProjects: ['id', 'containerId', 'projectId', 'from', 'to'],
   People: ['id', 'name', 'role', 'email', 'token', 'alerts:b', 'archived:b'],
   Projects: ['id', 'name', 'status', 'openedAt', 'closedAt', 'note', 'archived:b'],
-  Suppliers: ['id', 'name', 'phone', 'contact', 'note', 'archived:b', 'email', 'vatId', 'address'],
+  Suppliers: ['id', 'name', 'phone', 'contact', 'note', 'archived:b', 'email', 'vatId', 'address', 'extraDiscount:n'],
   // מחירון ספק: לכל ספק ופריט – קוד אצל הספק, מחיר מחירון והנחה רגילה (ליחידת קנייה, לפני מע"מ)
   SupplierItems: ['id', 'supplierId', 'itemId', 'code', 'listPrice:n', 'discount:n', 'updatedAt', 'archived:b'],
   Movements: ['id', 'at', 'clientAt', 'clientKey', 'type', 'itemId', 'qty:n', 'from', 'to', 'projectId',
     'byPersonId', 'orderId', 'orderLineId', 'unitPrice:n', 'supplierId', 'note', 'reversesId', 'flags'],
   UnknownItems: ['id', 'text', 'movementId', 'byPersonId', 'at', 'status', 'itemId'],
+  // extraDiscount – הנחה נוספת על כל ההזמנה (%), אחרי ההנחות בשורות
   Orders: ['id', 'number:n', 'supplierId', 'destId', 'status', 'pricesIncludeVat:b', 'vatRate:n',
-    'createdBy', 'createdAt', 'sentAt', 'closedAt', 'note'],
+    'createdBy', 'createdAt', 'sentAt', 'closedAt', 'note', 'extraDiscount:n'],
   // unitPriceBuy = נטו (מחירון פחות הנחה). listPrice/discount – מה שסגרו בהזמנה הזו. saveToList – לעדכן את מחירון הספק בשליחה
   OrderLines: ['id', 'orderId', 'itemId', 'qtyBuy:n', 'buyUnitQty:n', 'unitPriceBuy:n', 'listPrice:n', 'discount:n', 'saveToList:b'],
   Prices: ['id', 'itemId', 'supplierId', 'at', 'unitPrice:n', 'source', 'refId', 'listPrice:n', 'discount:n', 'qty:n'],
@@ -734,6 +735,7 @@ function unitPriceFromLine_(line, order) {
   if (line.unitPriceBuy === null || line.unitPriceBuy === '') return null;
   const per = line.buyUnitQty || 1;
   let p = line.unitPriceBuy / per;
+  if (order.extraDiscount) p = p * (1 - order.extraDiscount / 100); // הנחה נוספת על כל ההזמנה – מה ששילמנו בפועל
   if (order.pricesIncludeVat) p = p / (1 + (order.vatRate || 0) / 100);
   return Math.round(p * 10000) / 10000;
 }
@@ -783,6 +785,12 @@ function saveOrder_(data, actor) {
     supplierId: supplier.id, destId: dest.id, pricesIncludeVat: !!data.pricesIncludeVat,
     note: String(data.note || '').slice(0, 1000),
   };
+  // הנחה נוספת על כל ההזמנה. בהזמנה חדשה – ברירת המחדל היא ההנחה הכללית של הספק
+  if (data.extraDiscount !== undefined && data.extraDiscount !== null && data.extraDiscount !== '') {
+    fields.extraDiscount = Math.min(100, Math.max(0, Number(data.extraDiscount) || 0));
+  } else if (!order) {
+    fields.extraDiscount = Number(supplier.extraDiscount) || 0;
+  }
   if (order) {
     Db.update('Orders', order.id, fields);
   } else {
@@ -922,6 +930,9 @@ function orderPdf_(id) {
       (anyDiscount ? '<td>' + money(list) + '</td><td>' + (l.discount ? l.discount + '%' : '') + '</td>' : '') +
       '<td>' + money(l.unitPriceBuy) + '</td><td>' + money(sum) + '</td></tr>';
   }).join('');
+  const extra = Number(order.extraDiscount) || 0;
+  const sub = total;
+  total = total * (1 - extra / 100);
   const before = order.pricesIncludeVat ? total / (1 + vat) : total;
   const after = order.pricesIncludeVat ? total : total * (1 + vat);
   const date = String(order.sentAt || order.createdAt).slice(0, 10).split('-').reverse().join('.');
@@ -944,7 +955,8 @@ function orderPdf_(id) {
     '<div><b>לאספקה ל:</b> ' + esc(dest.name) + (dest.address ? '<br>' + esc(dest.address) : '') + '<br><b>הזמין:</b> ' + esc(by.name) + '</div></div>' +
     '<table><tr><th>#</th><th>קוד ספק</th><th>תיאור</th><th>כמות</th><th>יחידה</th>' + (anyDiscount ? '<th>מחירון</th><th>הנחה</th>' : '') + '<th>מחיר ליח\'</th><th>סה"כ</th></tr>' +
     rows + '</table>' +
-    '<div class="t">סה"כ לפני מע"מ: ' + money(before) + '<br>מע"מ ' + order.vatRate + '%: ' + money(after - before) +
+    '<div class="t">' + (extra ? 'סה"כ שורות: ' + money(sub) + '<br>הנחה נוספת ' + extra + '%: -' + money(sub - total) + '<br>' : '') +
+    'סה"כ לפני מע"מ: ' + money(before) + '<br>מע"מ ' + order.vatRate + '%: ' + money(after - before) +
     '<br><b>סה"כ כולל מע"מ: ' + money(after) + '</b></div>' +
     (order.note ? '<div class="n"><b>הערות:</b> ' + esc(order.note) + '</div>' : '') +
     '<div class="f">הופק ב-' + Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'dd.MM.yyyy HH:mm') + '</div>' +
@@ -985,7 +997,7 @@ const EDITABLE = {
   Units: ['name'],
   Locations: ['name', 'type', 'address'],
   People: ['name', 'role', 'email', 'alerts'],
-  Suppliers: ['name', 'phone', 'contact', 'note', 'email', 'vatId', 'address'],
+  Suppliers: ['name', 'phone', 'contact', 'note', 'email', 'vatId', 'address', 'extraDiscount'],
   Projects: ['name', 'note'],
   Items: ['parentId', 'name', 'kind', 'unitId', 'buyUnitName', 'buyUnitQty', 'minQty', 'aliases', 'imageId', 'value', 'sort', 'isFolder'],
 };
