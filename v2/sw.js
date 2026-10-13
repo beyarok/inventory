@@ -1,7 +1,8 @@
 // גרסת Firebase: שומר את קבצי הדף בטלפון (כולל ספריית Firebase), כדי שייפתח מיד – גם בלי קליטה.
 // בכל עדכון של הדף מעלים את מספר הגרסה.
-const VERSION = 'field2-11';
+const VERSION = 'field2-12';
 const FB = 'https://www.gstatic.com/firebasejs/12.4.0/';
+const JSPDF = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
 const FILES = ['./', 'index.html', 'config.js', 'core.js', 'engine.js', 'manifest.webmanifest',
   '../field.css', '../field.js', '../texts.js', '../icons/icon.svg',
   FB + 'firebase-app.js', FB + 'firebase-auth.js', FB + 'firebase-firestore.js'];
@@ -19,7 +20,7 @@ self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET') return;
   // ספריית Firebase: קבועה לפי מספר גרסה – קודם מהשמור
-  if (url.href.indexOf(FB) === 0) {
+  if (url.href.indexOf(FB) === 0 || url.href === JSPDF) {
     e.respondWith(caches.match(e.request).then(hit => hit || fetch(e.request).then(res => {
       const copy = res.clone();
       caches.open(VERSION).then(c => c.put(e.request, copy));

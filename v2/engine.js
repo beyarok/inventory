@@ -435,8 +435,50 @@
   }
 
   // צילום מסמך: הסקריפט של גוגל יוצר PDF ב-Drive ומחזיר קישור. ההרשאה – לפי הקישור האישי או כניסת גוגל של מנהל.
+  const JSPDF = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+  function loadJsPdf() {
+    if (window.jspdf) return Promise.resolve(window.jspdf.jsPDF);
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = JSPDF;
+      s.onload = () => resolve(window.jspdf.jsPDF);
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+  const imgSize = b64 => new Promise((resolve, reject) => {
+    const im = new Image();
+    im.onload = () => resolve({ w: im.width, h: im.height });
+    im.onerror = reject;
+    im.src = 'data:image/jpeg;base64,' + b64;
+  });
+  // צילומים → PDF: עמוד A4 לכל צילום (לאורך או לרוחב לפי התמונה), התמונה ממלאת את העמוד
+  async function imagesToPdf(images) {
+    const JsPDF = await loadJsPdf();
+    let pdf = null;
+    for (const b64 of images) {
+      const { w, h } = await imgSize(b64);
+      const land = w > h;
+      const pw = land ? 297 : 210;
+      const ph = land ? 210 : 297;
+      if (!pdf) pdf = new JsPDF({ orientation: land ? 'landscape' : 'portrait', unit: 'mm', format: 'a4', compress: true });
+      else pdf.addPage('a4', land ? 'landscape' : 'portrait');
+      const m = 5;
+      const k = Math.min((pw - 2 * m) / w, (ph - 2 * m) / h);
+      pdf.addImage('data:image/jpeg;base64,' + b64, 'JPEG', (pw - w * k) / 2, (ph - h * k) / 2, w * k, h * k, undefined, 'NONE');
+    }
+    return pdf.output('datauristring').split(',')[1];
+  }
+
   async function uploadDoc(payload) {
     await st.initP;
+    if (payload.images && payload.images.length) {
+      try {
+        payload = { name: payload.name, pdf: await imagesToPdf(payload.images) };
+      } catch (e) {
+        console.error('pdf', e); // אם הספרייה לא נטענה – הסקריפט יבנה את ה-PDF בעצמו (פחות חד)
+      }
+    }
     const req = Object.assign({ action: 'doc.upload' }, payload);
     if (st.mode === 'field') req.token = st.token;
     else if (st.adminKey) req.token = st.adminKey;
