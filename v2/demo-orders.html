@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#4A3524">
+<title>דמו הזמנות וספקים</title>
+<link rel="icon" href="../icons/icon.svg" type="image/svg+xml">
+<link href="https://fonts.googleapis.com/css2?family=Assistant:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../admin.css">
+<style>
+  .demo-bar { background: var(--warn-bg); color: var(--warn); padding: 8px 14px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .hintline { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .hintline .cheaper { color: var(--ok); font-weight: 600; }
+  .hintline .pricier { color: var(--danger); }
+  td input.in { padding: 4px 6px; }
+  .num { width: 84px; }
+  .pct { width: 64px; }
+  .changed { background: var(--warn-bg) !important; }
+  .tabs2 { margin-bottom: 12px; }
+  .bulk { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; background: var(--beige-2); padding: 8px 10px; border-radius: 10px; margin-bottom: 8px; }
+  .code { color: var(--muted); font-size: 12px; }
+  .totals { text-align: left; line-height: 1.9; }
+  .doc { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 24px 28px; max-width: 900px; }
+  .doc h2 { color: var(--brown); margin: 0; }
+  .doc .co { color: var(--green); font-weight: 600; }
+  .doc table th { background: var(--brown); color: #fff; }
+  .spark { display: inline-block; vertical-align: middle; }
+  tr.sel td { background: var(--green-bg); }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="side"><div class="brand">ניהול מלאי</div><nav class="nav" id="nav"></nav></aside>
+  <main class="main" id="main"></main>
+</div>
+<script>
+(() => {
+  // ---------- נתוני דוגמה (מתוך הצעת המחיר של הגרעין, 07.10.2026) ----------
+  const ITEMS = [
+    ['זווית שן 16-16 מ"מ (50)', '45503812'], ['זווית דו 16-16 חום מיטל פלוס', '46805002'], ['הסתעפות 16-16-16 חום מיטל פלוס', '46805004'],
+    ['מצמד הברגה 16-3/4" חום מיטל פלוס', '46805008'], ['הסתעפות מעבר 25-16-25 דרג 10', '46806301'], ['זווית חוץ 25-1/2" דרג 10', '46806206'],
+    ['זווית חוץ 25-3/4" דרג 10', '46806210'], ['הסתעפות 32-32-32 דרג 10', '46806086'], ['זווית דו כיוונית 32-32 דרג 10', '46806166'],
+    ['מצמד דו כיווני 32-32 דרג 10', '46806008'], ['רוכב תבור 32-3/4" הרכבה מהירה', '46802905'], ['אביזר קצה 32 דרג 10', '46806232'],
+    ['הסתעפות 40-40-40 דרג 10', '46806088'], ['מצמד דו כיווני 40-40 דרג 10', '46806010'], ['מצמד דו כיווני 50-50 דרג 10', '46806012'],
+  ].map((x, i) => ({ id: 'i' + i, name: x[0], code: x[1] }));
+  // מחירון, הנחה, כמות בהזמנה הקודמת
+  const G = [[114.53, 71, 30], [10.94, 78, 1120], [18.38, 78, 6000], [7.60, 78, 2100], [20.16, 75, 5000], [16.40, 75, 360], [16.40, 75, 1500],
+    [35.81, 75, 150], [26.29, 75, 45], [24.54, 75, 300], [17.09, 76, 1980], [16.65, 75, 240], [61.98, 75, 15], [33.31, 75, 90], [42.32, 75, 100]];
+  const SUPS = {
+    g: { id: 'g', name: 'הגרעין', phone: '08-9320400', contact: 'ניסים', vatId: '510356876', list: {}, history: [], orders: [] },
+    b: { id: 'b', name: 'אקווה ציוד השקיה (דוגמה)', phone: '03-5550000', contact: 'רוני', vatId: '', list: {}, history: [], orders: [] },
+  };
+  ITEMS.forEach((it, i) => {
+    const [price, disc, qty] = G[i];
+    SUPS.g.list[it.id] = { price, disc, code: it.code, at: '2026-10-07' };
+    SUPS.g.history.push({ itemId: it.id, at: '2026-10-07', price, disc, qty, order: 31044899 });
+    // מחיר ישן יותר – כדי שתהיה היסטוריה
+    SUPS.g.history.push({ itemId: it.id, at: '2026-04-12', price: +(price * 0.95).toFixed(2), disc: disc - 3, qty: Math.round(qty / 2), order: 30877120 });
+    if (i % 3 === 0) {
+      // לספק השני – רק חלק מהמוצרים, לפעמים זול יותר
+      const p2 = +(price * (i % 2 ? 0.9 : 1.15)).toFixed(2);
+      SUPS.b.list[it.id] = { price: p2, disc: 72, code: 'AQ-' + (1000 + i), at: i % 2 ? '2026-08-20' : '2026-02-03' };
+      SUPS.b.history.push({ itemId: it.id, at: SUPS.b.list[it.id].at, price: p2, disc: 72, qty: Math.round(qty / 3), order: 4410 + i });
+    }
+  });
+  SUPS.g.orders.push({ number: 31044899, at: '2026-10-07', lines: ITEMS.length, total: 98432.1 });
+  SUPS.b.orders.push({ number: 4410, at: '2026-08-20', lines: 5, total: 12200 });
+
+  const S = { view: 'order', supId: 'g', supTab: 'list', histItem: '', order: null, vatIncl: false, sent: null };
+  const VAT = 18;
+  const esc = s => String(s === null || s === undefined ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  const money = n => '₪' + Number(n).toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const net = (p, d) => Math.round(p * (1 - d / 100) * 100) / 100;
+  const date = iso => { const [y, m, d] = iso.split('-'); return d + '.' + m + '.' + y.slice(2); };
+  const ago = iso => { const days = Math.round((Date.parse('2026-10-13') - Date.parse(iso)) / 86400000); return days < 31 ? 'לפני ' + days + ' ימים' : 'לפני ' + Math.round(days / 30) + ' חודשים'; };
+  const item = id => ITEMS.find(i => i.id === id);
+  const last = (sup, id) => sup.history.filter(h => h.itemId === id).sort((a, b) => (a.at < b.at ? 1 : -1))[0];
+
+  // ---------- הזמנה חדשה ----------
+  function newOrder(supId) {
+    const sup = SUPS[supId];
+    S.order = { supId, lines: Object.keys(sup.list).slice(0, 6).map(id => lineFrom(sup, id)) };
+  }
+  function lineFrom(sup, id) {
+    const l = sup.list[id];
+    const h = last(sup, id);
+    return { itemId: id, qty: h ? h.qty : '', price: l ? l.price : '', disc: l ? l.disc : 0, sel: false, save: false, base: l ? { price: l.price, disc: l.disc } : null };
+  }
+
+  function bestElsewhere(supId, id) {
+    let best = null;
+    Object.values(SUPS).forEach(s => {
+      if (s.id === supId || !s.list[id]) return;
+      const n = net(s.list[id].price, s.list[id].disc);
+      if (!best || n < best.n) best = { n, s, at: s.list[id].at };
+    });
+    return best;
+  }
+
+  function orderView() {
+    const o = S.order;
+    const sup = SUPS[o.supId];
+    let total = 0;
+    const rows = o.lines.map((l, i) => {
+      const it = item(l.itemId);
+      const n = l.price === '' ? 0 : net(Number(l.price), Number(l.disc) || 0);
+      const sum = n * (Number(l.qty) || 0);
+      total += sum;
+      const h = last(sup, l.itemId);
+      const other = bestElsewhere(o.supId, l.itemId);
+      const changed = l.base && (Number(l.price) !== l.base.price || Number(l.disc) !== l.base.disc);
+      const hint = (h ? 'פעם קודמת כאן: ' + date(h.at) + ' · ' + h.qty.toLocaleString('he-IL') + ' יח\' · ' + money(net(h.price, h.disc)) + ' נטו (' + h.disc + '%)' : 'פעם ראשונה אצל ספק זה') +
+        (other ? ' · אצל ' + esc(other.s.name) + ': <span class="' + (other.n < n ? 'cheaper' : 'pricier') + '">' + money(other.n) + '</span> (' + ago(other.at) + ')' : '');
+      return '<tr class="' + (l.sel ? 'sel' : '') + '"><td><input type="checkbox" data-sel="' + i + '"' + (l.sel ? ' checked' : '') + '></td>' +
+        '<td><b>' + esc(it.name) + '</b><div class="hintline">' + hint + '</div></td>' +
+        '<td><input class="in num" type="number" min="0" data-f="qty" data-i="' + i + '" value="' + esc(l.qty) + '"></td>' +
+        '<td><input class="in num' + (changed && Number(l.price) !== l.base.price ? ' changed' : '') + '" type="number" step="0.01" data-f="price" data-i="' + i + '" value="' + esc(l.price) + '"></td>' +
+        '<td><input class="in pct' + (changed && Number(l.disc) !== l.base.disc ? ' changed' : '') + '" type="number" min="0" max="100" data-f="disc" data-i="' + i + '" value="' + esc(l.disc) + '">%</td>' +
+        '<td><b>' + (l.price === '' ? '' : money(n)) + '</b></td><td>' + (sum ? money(sum) : '') + '</td>' +
+        '<td>' + (changed || !l.base ? '<label class="small"><input type="checkbox" data-save="' + i + '"' + (l.save ? ' checked' : '') + '> עדכן במחירון</label>' : '<span class="muted small">כמו במחירון</span>') + '</td>' +
+        '<td><button class="btn sm danger" data-a="rm" data-i="' + i + '">✕</button></td></tr>';
+    }).join('');
+    const before = S.vatIncl ? total / (1 + VAT / 100) : total;
+    const after = S.vatIncl ? total : total * (1 + VAT / 100);
+    const notIn = ITEMS.filter(it => !o.lines.some(l => l.itemId === it.id));
+    return '<h1>הזמנה חדשה</h1>' +
+      '<div class="box" style="margin-bottom:12px"><div class="btns"><label>ספק:</label><select class="in" id="sup" style="max-width:240px">' +
+      Object.values(SUPS).map(s => '<option value="' + s.id + '"' + (s.id === o.supId ? ' selected' : '') + '>' + esc(s.name) + '</option>').join('') + '</select>' +
+      '<button class="link" data-a="card" data-s="' + sup.id + '">כרטיס ספק ›</button>' +
+      '<label class="small"><input type="checkbox" id="vat"' + (S.vatIncl ? ' checked' : '') + '> המחירים כוללים מע"מ</label></div></div>' +
+      '<div class="bulk"><button class="btn sm" data-a="selAll">סמן הכל</button><button class="btn sm" data-a="selNone">נקה סימון</button>' +
+      '<span>הנחה על המסומנים:</span><input class="in pct" type="number" id="bulkDisc" min="0" max="100">%<button class="btn sm p" data-a="bulk">החל</button>' +
+      '<span class="hint">שורה צהובה = שונה מהמחירון. "עדכן במחירון" = מעכשיו זה המחיר הרגיל. בלי סימון – רק להזמנה הזו.</span></div>' +
+      '<div class="box" style="padding:0;overflow:auto"><table><tr><th></th><th>מוצר</th><th>כמות</th><th>מחירון</th><th>הנחה</th><th>נטו ליח\'</th><th>סה"כ</th><th></th><th></th></tr>' + rows + '</table></div>' +
+      '<div class="btns" style="justify-content:space-between;margin:10px 0"><span class="btns"><select class="in" id="addItem" style="max-width:280px"><option value="">+ הוסף מוצר…</option>' +
+      notIn.map(it => '<option value="' + it.id + '">' + esc(it.name) + '</option>').join('') + '</select></span>' +
+      '<div class="totals">סה"כ לפני מע"מ: <b>' + money(before) + '</b><br>מע"מ ' + VAT + '%: ' + money(after - before) + '<br>סה"כ כולל מע"מ: <b>' + money(after) + '</b></div></div>' +
+      '<div class="btns"><button class="btn p" data-a="send">סמן כנשלחה והפק מסמך לספק</button></div>';
+  }
+
+  // ---------- מסמך לספק ----------
+  function docView() {
+    const o = S.sent;
+    const sup = SUPS[o.supId];
+    let total = 0;
+    const rows = o.lines.filter(l => Number(l.qty) > 0).map((l, i) => {
+      const it = item(l.itemId);
+      const n = net(Number(l.price), Number(l.disc) || 0);
+      const sum = n * Number(l.qty);
+      total += sum;
+      const code = (sup.list[l.itemId] || {}).code || '';
+      return '<tr><td>' + (i + 1) + '</td><td>' + esc(code) + '</td><td>' + esc(it.name) + '</td><td>' + Number(l.qty).toLocaleString('he-IL') + '</td><td>' + money(l.price) +
+        '</td><td>' + (Number(l.disc) ? l.disc + '%' : '') + '</td><td>' + money(n) + '</td><td>' + money(sum) + '</td></tr>';
+    }).join('');
+    const before = S.vatIncl ? total / (1 + VAT / 100) : total;
+    const after = S.vatIncl ? total : total * (1 + VAT / 100);
+    return '<h1>מסמך הזמנה לספק</h1><div class="hint" style="margin-bottom:10px">כך ייראה המסמך שנשלח לספק (את העיצוב נקבע יחד). ' +
+      (o.saved ? 'המחירון של הספק עודכן ' + (o.saved === 1 ? 'במוצר אחד שסומן' : 'ב-' + o.saved + ' מוצרים שסומנו') + ' "עדכן במחירון".' : 'המחירון של הספק לא השתנה (לא סומן "עדכן במחירון").') + '</div>' +
+      '<div class="doc"><div class="btns" style="justify-content:space-between"><div><div class="co">אומנויות בירוק בע"מ</div><div class="small muted">ח.פ. 0000000 · כתובת · טלפון</div></div>' +
+      '<div style="text-align:left"><h2>הזמנת רכש מס\' 3</h2><div class="small">תאריך: 13.10.2026</div></div></div>' +
+      '<div style="margin:14px 0"><b>לכבוד:</b> ' + esc(sup.name) + ' · טל\' ' + esc(sup.phone) + (sup.contact ? ' · ' + esc(sup.contact) : '') + '<br><b>יעד אספקה:</b> מרלו"ג</div>' +
+      '<table><tr><th>#</th><th>קוד ספק</th><th>תיאור</th><th>כמות</th><th>מחירון</th><th>הנחה</th><th>נטו ליח\'</th><th>סה"כ</th></tr>' + rows + '</table>' +
+      '<div class="totals" style="margin-top:12px">סה"כ לפני מע"מ: <b>' + money(before) + '</b><br>מע"מ ' + VAT + '%: ' + money(after - before) + '<br>סה"כ לתשלום: <b>' + money(after) + '</b></div>' +
+      '<div class="small muted" style="margin-top:18px">הזמין: ארז · לשאלות: 050-0000000</div></div>' +
+      '<div class="btns" style="margin-top:12px"><button class="btn" data-a="back">חזרה להזמנה</button><button class="btn" data-a="card" data-s="' + sup.id + '">לכרטיס הספק ›</button></div>';
+  }
+
+  // ---------- כרטיס ספק ----------
+  function cardView() {
+    const sup = SUPS[S.supId];
+    const tabs = [['list', 'מחירון'], ['history', 'היסטוריית מחירים'], ['orders', 'הזמנות'], ['details', 'פרטים']];
+    let h = '<h1>' + esc(sup.name) + '</h1><div class="seg tabs2">' + tabs.map(t => '<button class="' + (S.supTab === t[0] ? 'on' : '') + '" data-a="supTab" data-t="' + t[0] + '">' + t[1] + '</button>').join('') + '</div>';
+    if (S.supTab === 'details') {
+      h += '<div class="box"><div class="form" style="max-width:520px"><label>טלפון</label><span>' + esc(sup.phone) + '</span><label>איש קשר</label><span>' + esc(sup.contact) +
+        '</span><label>ח.פ.</label><span>' + esc(sup.vatId) + '</span></div></div>';
+    } else if (S.supTab === 'orders') {
+      h += '<div class="box" style="padding:0"><table><tr><th>מס\'</th><th>תאריך</th><th>שורות</th><th>סה"כ</th></tr>' +
+        sup.orders.map(o => '<tr><td>' + o.number + '</td><td>' + date(o.at) + '</td><td>' + o.lines + '</td><td>' + money(o.total) + '</td></tr>').join('') + '</table></div>';
+    } else if (S.supTab === 'history') {
+      const ids = [...new Set(sup.history.map(x => x.itemId))];
+      if (!S.histItem || ids.indexOf(S.histItem) < 0) S.histItem = ids[0];
+      const hs = sup.history.filter(x => x.itemId === S.histItem).sort((a, b) => (a.at < b.at ? 1 : -1));
+      h += '<div class="btns" style="margin-bottom:10px"><select class="in" id="histItem" style="max-width:320px">' + ids.map(id => '<option value="' + id + '"' + (id === S.histItem ? ' selected' : '') + '>' + esc(item(id).name) + '</option>').join('') + '</select></div>' +
+        '<div class="box" style="padding:0"><table><tr><th>תאריך</th><th>הזמנה</th><th>כמות</th><th>מחירון</th><th>הנחה</th><th>שילמנו נטו</th></tr>' +
+        hs.map(x => '<tr><td>' + date(x.at) + '</td><td>' + x.order + '</td><td>' + x.qty.toLocaleString('he-IL') + '</td><td>' + money(x.price) + '</td><td>' + x.disc + '%</td><td><b>' + money(net(x.price, x.disc)) + '</b></td></tr>').join('') + '</table></div>';
+    } else {
+      const ids = Object.keys(sup.list);
+      h += '<div class="bulk"><button class="btn sm" data-a="lselAll">סמן הכל</button><span>הנחה רגילה למסומנים:</span><input class="in pct" type="number" id="lbulk" min="0" max="100">%<button class="btn sm p" data-a="lbulk">החל</button>' +
+        '<span class="hint">המחירון מתעדכן גם לבד – מהזמנות שבהן סימנתם "עדכן במחירון".</span></div>' +
+        '<div class="box" style="padding:0;overflow:auto"><table><tr><th></th><th>מוצר</th><th>קוד אצל הספק</th><th>מחירון</th><th>הנחה רגילה</th><th>נטו</th><th>עודכן</th></tr>' +
+        ids.map(id => {
+          const l = sup.list[id];
+          return '<tr class="' + (l.sel ? 'sel' : '') + '"><td><input type="checkbox" data-lsel="' + id + '"' + (l.sel ? ' checked' : '') + '></td><td>' + esc(item(id).name) + '</td><td class="code">' + esc(l.code) + '</td>' +
+            '<td><input class="in num" type="number" step="0.01" data-lf="price" data-id="' + id + '" value="' + l.price + '"></td>' +
+            '<td><input class="in pct" type="number" data-lf="disc" data-id="' + id + '" value="' + l.disc + '">%</td><td><b>' + money(net(l.price, l.disc)) + '</b></td><td class="muted small">' + date(l.at) + '</td></tr>';
+        }).join('') + '</table></div>';
+    }
+    h += '<div class="btns" style="margin-top:12px"><button class="btn" data-a="toOrder">› להזמנה חדשה מ' + esc(sup.name) + '</button></div>';
+    return h;
+  }
+
+  // ---------- ציור ----------
+  function render() {
+    document.getElementById('nav').innerHTML = [['order', 'הזמנה חדשה'], ['card', 'כרטיס ספק']].map(x =>
+      '<button class="' + ((S.view === x[0] || (x[0] === 'order' && S.view === 'doc')) ? 'on' : '') + '" data-a="nav" data-v="' + x[0] + '">' + x[1] + '</button>').join('');
+    const body = S.view === 'card' ? cardView() : S.view === 'doc' ? docView() : orderView();
+    document.getElementById('main').innerHTML = '<div class="demo-bar">דמו לבדיקה – הנתונים מהצעת המחיר של הגרעין, ושום דבר לא נשמר. מנסים, ואומרים מה עובד ומה לא.</div>' + body;
+  }
+
+  const H = {
+    nav: el => { S.view = el.dataset.v; render(); },
+    card: el => { S.view = 'card'; S.supId = el.dataset.s; render(); },
+    supTab: el => { S.supTab = el.dataset.t; render(); },
+    toOrder: () => { newOrder(S.supId); S.view = 'order'; render(); },
+    selAll: () => { S.order.lines.forEach(l => { l.sel = true; }); render(); },
+    selNone: () => { S.order.lines.forEach(l => { l.sel = false; }); render(); },
+    bulk: () => {
+      const v = document.getElementById('bulkDisc').value;
+      if (v === '') return;
+      S.order.lines.forEach(l => { if (l.sel) l.disc = Number(v); });
+      render();
+    },
+    lselAll: () => { Object.values(SUPS[S.supId].list).forEach(l => { l.sel = true; }); render(); },
+    lbulk: () => {
+      const v = document.getElementById('lbulk').value;
+      if (v === '') return;
+      Object.values(SUPS[S.supId].list).forEach(l => { if (l.sel) { l.disc = Number(v); l.at = '2026-10-13'; l.sel = false; } });
+      render();
+    },
+    rm: el => { S.order.lines.splice(Number(el.dataset.i), 1); render(); },
+    back: () => { S.view = 'order'; render(); },
+    send: () => {
+      const o = S.order;
+      const sup = SUPS[o.supId];
+      let saved = 0;
+      o.lines.forEach(l => {
+        if (!(Number(l.qty) > 0) || l.price === '') return;
+        sup.history.push({ itemId: l.itemId, at: '2026-10-13', price: Number(l.price), disc: Number(l.disc) || 0, qty: Number(l.qty), order: 3 });
+        if (l.save || !l.base) {
+          sup.list[l.itemId] = Object.assign({}, sup.list[l.itemId] || { code: '' }, { price: Number(l.price), disc: Number(l.disc) || 0, at: '2026-10-13' });
+          saved++;
+        }
+      });
+      sup.orders.unshift({ number: 3, at: '2026-10-13', lines: o.lines.length, total: o.lines.reduce((s, l) => s + net(Number(l.price) || 0, Number(l.disc) || 0) * (Number(l.qty) || 0), 0) });
+      S.sent = Object.assign({}, o, { saved });
+      S.view = 'doc';
+      render();
+    },
+  };
+
+  document.addEventListener('click', e => {
+    const el = e.target.closest('[data-a]');
+    if (el && H[el.dataset.a]) H[el.dataset.a](el);
+  });
+  document.addEventListener('change', e => {
+    const t = e.target;
+    if (t.id === 'sup') { newOrder(t.value); render(); }
+    else if (t.id === 'vat') { S.vatIncl = t.checked; render(); }
+    else if (t.id === 'addItem' && t.value) { S.order.lines.push(lineFrom(SUPS[S.order.supId], t.value)); render(); }
+    else if (t.id === 'histItem') { S.histItem = t.value; render(); }
+    else if (t.dataset.sel !== undefined) { S.order.lines[Number(t.dataset.sel)].sel = t.checked; render(); }
+    else if (t.dataset.save !== undefined) { S.order.lines[Number(t.dataset.save)].save = t.checked; }
+    else if (t.dataset.lsel !== undefined) { SUPS[S.supId].list[t.dataset.lsel].sel = t.checked; render(); }
+    else if (t.dataset.f) { S.order.lines[Number(t.dataset.i)][t.dataset.f] = t.value; render(); }
+    else if (t.dataset.lf) { const l = SUPS[S.supId].list[t.dataset.id]; l[t.dataset.lf] = Number(t.value); l.at = '2026-10-13'; render(); }
+  });
+
+  newOrder('g');
+  render();
+})();
+</script>
+</body>
+</html>
