@@ -27,6 +27,12 @@
   .doc table th { background: var(--brown); color: #fff; }
   .spark { display: inline-block; vertical-align: middle; }
   tr.sel td { background: var(--green-bg); }
+  .selbar { position: sticky; top: 0; z-index: 5; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; background: var(--green); color: #fff; padding: 8px 12px; border-radius: 10px; margin-bottom: 8px; }
+  .selbar .btn { background: #fff; color: var(--green-dark); border-color: #fff; }
+  .selbar .grow { flex: 1; font-size: 13px; opacity: .9; }
+  .rowcheck { width: 18px; height: 18px; cursor: pointer; }
+  .toast2 { position: fixed; bottom: 18px; left: 18px; z-index: 50; background: var(--brown); color: #fff; padding: 10px 14px; border-radius: 10px; display: flex; gap: 12px; align-items: center; }
+  .toast2 button { color: var(--leaf); text-decoration: underline; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -112,14 +118,14 @@
       const changed = l.base && (Number(l.price) !== l.base.price || Number(l.disc) !== l.base.disc);
       const hint = (h ? 'פעם קודמת כאן: ' + date(h.at) + ' · ' + h.qty.toLocaleString('he-IL') + ' יח\' · ' + money(net(h.price, h.disc)) + ' נטו (' + h.disc + '%)' : 'פעם ראשונה אצל ספק זה') +
         (other ? ' · אצל ' + esc(other.s.name) + ': <span class="' + (other.n < n ? 'cheaper' : 'pricier') + '">' + money(other.n) + '</span> (' + ago(other.at) + ')' : '');
-      return '<tr class="' + (l.sel ? 'sel' : '') + '"><td><input type="checkbox" data-sel="' + i + '"' + (l.sel ? ' checked' : '') + '></td>' +
+      return '<tr class="' + (l.sel ? 'sel' : '') + '"><td><input type="checkbox" class="rowcheck" data-row="o" data-key="' + i + '"' + (l.sel ? ' checked' : '') + '></td>' +
         '<td><b>' + esc(it.name) + '</b><div class="hintline">' + hint + '</div></td>' +
         '<td><input class="in num" type="number" min="0" data-f="qty" data-i="' + i + '" value="' + esc(l.qty) + '"></td>' +
         '<td><input class="in num' + (changed && Number(l.price) !== l.base.price ? ' changed' : '') + '" type="number" step="0.01" data-f="price" data-i="' + i + '" value="' + esc(l.price) + '"></td>' +
-        '<td><input class="in pct' + (changed && Number(l.disc) !== l.base.disc ? ' changed' : '') + '" type="number" min="0" max="100" data-f="disc" data-i="' + i + '" value="' + esc(l.disc) + '">%</td>' +
+        '<td style="white-space:nowrap"><input class="in pct' + (changed && Number(l.disc) !== l.base.disc ? ' changed' : '') + '" type="number" min="0" max="100" data-f="disc" data-i="' + i + '" value="' + esc(l.disc) + '">%</td>' +
         '<td><b>' + (l.price === '' ? '' : money(n)) + '</b></td><td>' + (sum ? money(sum) : '') + '</td>' +
         '<td>' + (changed || !l.base ? '<label class="small"><input type="checkbox" data-save="' + i + '"' + (l.save ? ' checked' : '') + '> עדכן במחירון</label>' : '<span class="muted small">כמו במחירון</span>') + '</td>' +
-        '<td><button class="btn sm danger" data-a="rm" data-i="' + i + '">✕</button></td></tr>';
+        '<td><button class="btn sm danger" data-a="rm" data-k="o" data-key="' + i + '" title="' + (l.sel && nSel('o') > 1 ? 'מחק את כל המסומנים' : 'מחק') + '">✕</button></td></tr>';
     }).join('');
     const before = S.vatIncl ? total / (1 + VAT / 100) : total;
     const after = S.vatIncl ? total : total * (1 + VAT / 100);
@@ -129,10 +135,8 @@
       Object.values(SUPS).map(s => '<option value="' + s.id + '"' + (s.id === o.supId ? ' selected' : '') + '>' + esc(s.name) + '</option>').join('') + '</select>' +
       '<button class="link" data-a="card" data-s="' + sup.id + '">כרטיס ספק ›</button>' +
       '<label class="small"><input type="checkbox" id="vat"' + (S.vatIncl ? ' checked' : '') + '> המחירים כוללים מע"מ</label></div></div>' +
-      '<div class="bulk"><button class="btn sm" data-a="selAll">סמן הכל</button><button class="btn sm" data-a="selNone">נקה סימון</button>' +
-      '<span>הנחה על המסומנים:</span><input class="in pct" type="number" id="bulkDisc" min="0" max="100">%<button class="btn sm p" data-a="bulk">החל</button>' +
-      '<span class="hint">שורה צהובה = שונה מהמחירון. "עדכן במחירון" = מעכשיו זה המחיר הרגיל. בלי סימון – רק להזמנה הזו.</span></div>' +
-      '<div class="box" style="padding:0;overflow:auto"><table><tr><th></th><th>מוצר</th><th>כמות</th><th>מחירון</th><th>הנחה</th><th>נטו ליח\'</th><th>סה"כ</th><th></th><th></th></tr>' + rows + '</table></div>' +
+      selBar('o') + '<div class="hint" style="margin-bottom:6px">שדה צהוב = שונה מהמחירון. "עדכן במחירון" = מעכשיו זה המחיר הרגיל; בלי סימון – רק להזמנה הזו.</div>' +
+      '<div class="box" style="padding:0;overflow:auto"><table><tr><th>' + allBox('o') + '</th><th>מוצר</th><th>כמות</th><th>מחירון</th><th>הנחה</th><th>נטו ליח\'</th><th>סה"כ</th><th></th><th></th></tr>' + rows + '</table></div>' +
       '<div class="btns" style="justify-content:space-between;margin:10px 0"><span class="btns"><select class="in" id="addItem" style="max-width:280px"><option value="">+ הוסף מוצר…</option>' +
       notIn.map(it => '<option value="' + it.id + '">' + esc(it.name) + '</option>').join('') + '</select></span>' +
       '<div class="totals">סה"כ לפני מע"מ: <b>' + money(before) + '</b><br>מע"מ ' + VAT + '%: ' + money(after - before) + '<br>סה"כ כולל מע"מ: <b>' + money(after) + '</b></div></div>' +
@@ -186,14 +190,14 @@
         hs.map(x => '<tr><td>' + date(x.at) + '</td><td>' + x.order + '</td><td>' + x.qty.toLocaleString('he-IL') + '</td><td>' + money(x.price) + '</td><td>' + x.disc + '%</td><td><b>' + money(net(x.price, x.disc)) + '</b></td></tr>').join('') + '</table></div>';
     } else {
       const ids = Object.keys(sup.list);
-      h += '<div class="bulk"><button class="btn sm" data-a="lselAll">סמן הכל</button><span>הנחה רגילה למסומנים:</span><input class="in pct" type="number" id="lbulk" min="0" max="100">%<button class="btn sm p" data-a="lbulk">החל</button>' +
-        '<span class="hint">המחירון מתעדכן גם לבד – מהזמנות שבהן סימנתם "עדכן במחירון".</span></div>' +
-        '<div class="box" style="padding:0;overflow:auto"><table><tr><th></th><th>מוצר</th><th>קוד אצל הספק</th><th>מחירון</th><th>הנחה רגילה</th><th>נטו</th><th>עודכן</th></tr>' +
+      h += selBar('l') + '<div class="hint" style="margin-bottom:6px">המחירון מתעדכן גם לבד – מהזמנות שבהן סימנתם "עדכן במחירון".</div>' +
+        '<div class="box" style="padding:0;overflow:auto"><table><tr><th>' + allBox('l') + '</th><th>מוצר</th><th>קוד אצל הספק</th><th>מחירון</th><th>הנחה רגילה</th><th>נטו</th><th>עודכן</th><th></th></tr>' +
         ids.map(id => {
           const l = sup.list[id];
-          return '<tr class="' + (l.sel ? 'sel' : '') + '"><td><input type="checkbox" data-lsel="' + id + '"' + (l.sel ? ' checked' : '') + '></td><td>' + esc(item(id).name) + '</td><td class="code">' + esc(l.code) + '</td>' +
+          return '<tr class="' + (l.sel ? 'sel' : '') + '"><td><input type="checkbox" class="rowcheck" data-row="l" data-key="' + id + '"' + (l.sel ? ' checked' : '') + '></td><td>' + esc(item(id).name) + '</td><td class="code">' + esc(l.code) + '</td>' +
             '<td><input class="in num" type="number" step="0.01" data-lf="price" data-id="' + id + '" value="' + l.price + '"></td>' +
-            '<td><input class="in pct" type="number" data-lf="disc" data-id="' + id + '" value="' + l.disc + '">%</td><td><b>' + money(net(l.price, l.disc)) + '</b></td><td class="muted small">' + date(l.at) + '</td></tr>';
+            '<td style="white-space:nowrap"><input class="in pct" type="number" data-lf="disc" data-id="' + id + '" value="' + l.disc + '">%</td><td><b>' + money(net(l.price, l.disc)) + '</b></td><td class="muted small">' + date(l.at) + '</td>' +
+            '<td><button class="btn sm danger" data-a="rm" data-k="l" data-key="' + id + '" title="הסר מהמחירון">✕</button></td></tr>';
         }).join('') + '</table></div>';
     }
     h += '<div class="btns" style="margin-top:12px"><button class="btn" data-a="toOrder">› להזמנה חדשה מ' + esc(sup.name) + '</button></div>';
@@ -205,7 +209,46 @@
     document.getElementById('nav').innerHTML = [['order', 'הזמנה חדשה'], ['card', 'כרטיס ספק']].map(x =>
       '<button class="' + ((S.view === x[0] || (x[0] === 'order' && S.view === 'doc')) ? 'on' : '') + '" data-a="nav" data-v="' + x[0] + '">' + x[1] + '</button>').join('');
     const body = S.view === 'card' ? cardView() : S.view === 'doc' ? docView() : orderView();
-    document.getElementById('main').innerHTML = '<div class="demo-bar">דמו לבדיקה – הנתונים מהצעת המחיר של הגרעין, ושום דבר לא נשמר. מנסים, ואומרים מה עובד ומה לא.</div>' + body;
+    document.getElementById('main').innerHTML = '<div class="demo-bar">דמו לבדיקה – הנתונים מהצעת המחיר של הגרעין, ושום דבר לא נשמר. מנסים, ואומרים מה עובד ומה לא.</div>' + body +
+      (S.toast ? '<div class="toast2"><span>' + esc(S.toast.text) + '</span>' + (S.toast.snap ? '<button data-a="undo">בטל</button>' : '') + '</div>' : '');
+  }
+
+  // ---------- בחירה: כל שינוי בשורה מסומנת חל על כל המסומנות ----------
+  // o = שורות ההזמנה, l = מחירון הספק
+  const rowsOf = k => (k === 'o' ? S.order.lines : Object.keys(SUPS[S.supId].list).map(id => SUPS[S.supId].list[id]));
+  const rowOf = (k, key) => (k === 'o' ? S.order.lines[Number(key)] : SUPS[S.supId].list[key]);
+  const nSel = k => rowsOf(k).filter(r => r.sel).length;
+  function selBar(k) {
+    const n = nSel(k);
+    if (!n) return '';
+    return '<div class="selbar"><b>נבחרו ' + n + '</b><span class="grow">שינוי בשורה מסומנת (הנחה, מחיר, כמות, עדכון מחירון, מחיקה) חל על כל ' + (n === 1 ? 'המסומנת' : n + ' המסומנות') + '</span>' +
+      '<button class="btn sm" data-a="selClear" data-k="' + k + '">נקה סימון</button></div>';
+  }
+  function allBox(k) {
+    const rows = rowsOf(k);
+    const all = rows.length && rows.every(r => r.sel);
+    return '<input type="checkbox" class="rowcheck" data-all="' + k + '" title="סמן הכל"' + (all ? ' checked' : '') + '>';
+  }
+  // שומרים מצב קודם – בשביל "בטל"
+  function snapshot(k) {
+    return k === 'o' ? { k, lines: JSON.parse(JSON.stringify(S.order.lines)) } : { k, sup: S.supId, list: JSON.parse(JSON.stringify(SUPS[S.supId].list)) };
+  }
+  function toast(text, snap) {
+    S.toast = { text, snap };
+    clearTimeout(S.toastT);
+    S.toastT = setTimeout(() => { S.toast = null; render(); }, 8000);
+  }
+  // מחזיר את השורות שהשינוי חל עליהן: כל המסומנות (אם השורה מסומנת) או רק היא
+  function targets(k, row) {
+    return row.sel ? rowsOf(k).filter(r => r.sel) : [row];
+  }
+  function applyEdit(k, key, fn, label) {
+    const row = rowOf(k, key);
+    const list = targets(k, row);
+    const snap = list.length > 1 ? snapshot(k) : null;
+    list.forEach(fn);
+    if (snap) toast(label + ' – הוחל על ' + list.length + ' מוצרים', snap);
+    render();
   }
 
   const H = {
@@ -213,22 +256,25 @@
     card: el => { S.view = 'card'; S.supId = el.dataset.s; render(); },
     supTab: el => { S.supTab = el.dataset.t; render(); },
     toOrder: () => { newOrder(S.supId); S.view = 'order'; render(); },
-    selAll: () => { S.order.lines.forEach(l => { l.sel = true; }); render(); },
-    selNone: () => { S.order.lines.forEach(l => { l.sel = false; }); render(); },
-    bulk: () => {
-      const v = document.getElementById('bulkDisc').value;
-      if (v === '') return;
-      S.order.lines.forEach(l => { if (l.sel) l.disc = Number(v); });
+    selClear: el => { rowsOf(el.dataset.k).forEach(r => { r.sel = false; }); render(); },
+    undo: () => {
+      const s = S.toast && S.toast.snap;
+      if (!s) return;
+      if (s.k === 'o') S.order.lines = s.lines; else SUPS[s.sup].list = s.list;
+      S.toast = null;
       render();
     },
-    lselAll: () => { Object.values(SUPS[S.supId].list).forEach(l => { l.sel = true; }); render(); },
-    lbulk: () => {
-      const v = document.getElementById('lbulk').value;
-      if (v === '') return;
-      Object.values(SUPS[S.supId].list).forEach(l => { if (l.sel) { l.disc = Number(v); l.at = '2026-10-13'; l.sel = false; } });
+    rm: el => {
+      const k = el.dataset.k;
+      const row = rowOf(k, el.dataset.key);
+      const list = targets(k, row);
+      if (list.length > 1 && !confirm((k === 'o' ? 'למחוק ' : 'להסיר מהמחירון ') + list.length + ' מוצרים מסומנים?')) return;
+      const snap = snapshot(k);
+      if (k === 'o') S.order.lines = S.order.lines.filter(r => list.indexOf(r) < 0);
+      else { const L = SUPS[S.supId].list; Object.keys(L).forEach(id => { if (list.indexOf(L[id]) >= 0) delete L[id]; }); }
+      toast((k === 'o' ? 'נמחקו ' : 'הוסרו מהמחירון ') + list.length + ' מוצרים', snap);
       render();
     },
-    rm: el => { S.order.lines.splice(Number(el.dataset.i), 1); render(); },
     back: () => { S.view = 'order'; render(); },
     send: () => {
       const o = S.order;
@@ -250,6 +296,23 @@
   };
 
   document.addEventListener('click', e => {
+    const t = e.target;
+    if (t.matches && t.matches('input[data-row]')) {
+      const k = t.dataset.row;
+      const keys = k === 'o' ? S.order.lines.map((x, i) => String(i)) : Object.keys(SUPS[S.supId].list);
+      const at = keys.indexOf(t.dataset.key);
+      const from = S.lastSel && S.lastSel.k === k && e.shiftKey ? keys.indexOf(S.lastSel.key) : at;
+      const [a, b] = [Math.min(from, at), Math.max(from, at)];
+      for (let i = a; i <= b; i++) rowOf(k, keys[i]).sel = t.checked;
+      S.lastSel = { k, key: t.dataset.key };
+      render();
+      return;
+    }
+    if (t.matches && t.matches('input[data-all]')) {
+      rowsOf(t.dataset.all).forEach(r => { r.sel = t.checked; });
+      render();
+      return;
+    }
     const el = e.target.closest('[data-a]');
     if (el && H[el.dataset.a]) H[el.dataset.a](el);
   });
@@ -259,11 +322,20 @@
     else if (t.id === 'vat') { S.vatIncl = t.checked; render(); }
     else if (t.id === 'addItem' && t.value) { S.order.lines.push(lineFrom(SUPS[S.order.supId], t.value)); render(); }
     else if (t.id === 'histItem') { S.histItem = t.value; render(); }
-    else if (t.dataset.sel !== undefined) { S.order.lines[Number(t.dataset.sel)].sel = t.checked; render(); }
-    else if (t.dataset.save !== undefined) { S.order.lines[Number(t.dataset.save)].save = t.checked; }
-    else if (t.dataset.lsel !== undefined) { SUPS[S.supId].list[t.dataset.lsel].sel = t.checked; render(); }
-    else if (t.dataset.f) { S.order.lines[Number(t.dataset.i)][t.dataset.f] = t.value; render(); }
-    else if (t.dataset.lf) { const l = SUPS[S.supId].list[t.dataset.id]; l[t.dataset.lf] = Number(t.value); l.at = '2026-10-13'; render(); }
+    else if (t.dataset.save !== undefined) {
+      const v = t.checked;
+      applyEdit('o', t.dataset.save, r => { r.save = v; }, v ? 'עדכן במחירון' : 'בלי עדכון מחירון');
+    }
+    else if (t.dataset.f) {
+      const f = t.dataset.f;
+      const v = t.value;
+      applyEdit('o', t.dataset.i, r => { r[f] = v; }, { qty: 'כמות', price: 'מחירון', disc: 'הנחה' }[f] + ' ' + v + (f === 'disc' ? '%' : ''));
+    }
+    else if (t.dataset.lf) {
+      const f = t.dataset.lf;
+      const v = Number(t.value);
+      applyEdit('l', t.dataset.id, r => { r[f] = v; r.at = '2026-10-13'; }, (f === 'disc' ? 'הנחה רגילה ' + v + '%' : 'מחירון ' + v));
+    }
   });
 
   newOrder('g');
