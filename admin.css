@@ -175,3 +175,5 @@ table.countsheet td.blankcell { min-width: 90px; border-right: 1px solid var(--l
   .form { grid-template-columns: 1fr; gap: 4px; }
   .form label { margin-top: 8px; }
 }
+
+.doclink { text-decoration: none; }

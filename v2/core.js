@@ -10,6 +10,7 @@ const CONFIG = {
   SESSION_SECONDS: 21600,    // תוקף כניסת מנהל (6 שעות – המקסימום של CacheService)
   LOCK_MS: 20000,
   BACKUP_FOLDER: 'גיבויי מלאי',
+  DOCS_FOLDER: 'מסמכי מלאי',
 };
 
 // עמודות לכל גיליון. סיומת :n = מספר, :b = כן/לא. כל השאר טקסט.
@@ -31,11 +32,13 @@ const SCHEMA = {
   Prices: ['id', 'itemId', 'supplierId', 'at', 'unitPrice:n', 'source', 'refId'],
   Settings: ['key', 'value'],
   Log: ['at', 'byPersonId', 'action', 'entity', 'entityId', 'summary', 'before', 'after'],
+  // מסמכים מצולמים (PDF ב-Drive): קבלת סחורה, קנייה בחנות, נזק, פריט לא מוכר, הצעת מחיר...
+  Docs: ['id', 'at', 'byPersonId', 'kind', 'name', 'fileId', 'url', 'orderId', 'clientKey', 'note', 'archived:b'],
 };
 
 const ID_PREFIX = {
   Items: 'IT', Units: 'UN', Locations: 'LC', ContainerProjects: 'CP', People: 'PE', Projects: 'PR',
-  Suppliers: 'SU', Movements: 'MV', UnknownItems: 'UK', Orders: 'OR', OrderLines: 'OL', Prices: 'PC',
+  Suppliers: 'SU', Movements: 'MV', UnknownItems: 'UK', Orders: 'OR', OrderLines: 'OL', Prices: 'PC', Docs: 'DC',
 };
 
 const DEFAULT_SETTINGS = {
@@ -559,6 +562,20 @@ function setMovementProject_(id, projectId, actor) {
   log_(actor, 'setProject', 'Movements', id, pr.name);
   Model.reset();
   return { id, projectId: pr.id };
+}
+
+// מסמך מצולם: הקובץ כבר ב-Drive, כאן נרשם הקישור (פעם אחת לכל clientKey)
+function addDoc_(d, actor) {
+  if (!d.fileId || !d.url) userError_(MSG.missing + 'קובץ');
+  if (d.clientKey) {
+    const dup = Db.all('Docs').find(x => x.clientKey === String(d.clientKey) && x.fileId === String(d.fileId));
+    if (dup) return { id: dup.id, duplicate: true };
+  }
+  const row = Db.insert('Docs', {
+    at: now_(), byPersonId: actor.id, kind: String(d.kind || '').slice(0, 30), name: String(d.name || '').slice(0, 200),
+    fileId: String(d.fileId), url: String(d.url), orderId: d.orderId || '', clientKey: d.clientKey || '', note: String(d.note || '').slice(0, 300),
+  });
+  return { id: row.id };
 }
 
 // ==================== Orders.gs ====================
@@ -1115,6 +1132,12 @@ const FIELD_ACTIONS = {
     }
     return out;
   },
+  // מסמך שהועלה ל-Drive (הקובץ עצמו נוצר בסקריפט – doc.upload) – כאן רק נרשם במערכת
+  'field.doc': (req, me) => {
+    const out = addDoc_(req.doc || {}, me);
+    bumpVersion_();
+    return out;
+  },
   'field.undo': (req, me) => {
     const out = withLock_(() => reverseMovement_(req.movementId, me, false));
     bumpVersion_();
@@ -1131,6 +1154,7 @@ const ADMIN_ACTIONS = {
   'admin.items.quickAdd': (req, me) => quickAdd_(req.parentId || '', req.rows || [], me),
   'admin.movement.add': (req, me) => recordMovement_(req.movement || {}, me, true),
   'admin.movement.reverse': (req, me) => reverseMovement_(req.id, me, true),
+  'admin.doc.add': (req, me) => addDoc_(req.doc || {}, me),
   'admin.movement.setProject': (req, me) => setMovementProject_(req.id, req.projectId, me),
   'admin.unknown.resolve': (req, me) => strip_(resolveUnknown_(req.id, req.itemId, me)),
   'admin.purchase.setPrice': (req, me) => strip_(setPurchasePrice_(req.movementId, req.unitPrice, req.includesVat, req.supplierId, me)),
@@ -1153,6 +1177,7 @@ function route_(req) {
   if (action === 'ping') return { ver: dataVersion_() };
   if (action === 'admin.login') return adminLogin_(req.idToken);
   if (action === 'fb.backup') return fbBackupRequest_(req.idToken); // "גבה עכשיו" מהגרסה החדשה
+  if (action === 'doc.upload') return docUpload_(req); // צילום מסמך → PDF ב-Drive
   if (FIELD_ACTIONS[action]) return FIELD_ACTIONS[action](req, fieldPerson_(req.token));
   if (ADMIN_ACTIONS[action]) {
     const me = adminPerson_(req.session);
@@ -1235,7 +1260,7 @@ function adminBootstrap_(me) {
   const ver = dataVersion_();
   const tables = {};
   ['Items', 'Units', 'Locations', 'ContainerProjects', 'People', 'Projects', 'Suppliers', 'Movements',
-    'UnknownItems', 'Orders', 'OrderLines', 'Prices'].forEach(name => {
+    'UnknownItems', 'Orders', 'OrderLines', 'Prices', 'Docs'].forEach(name => {
     tables[name] = Db.clean(Db.all(name, { includeArchived: true }));
   });
   const log = Db.all('Log');

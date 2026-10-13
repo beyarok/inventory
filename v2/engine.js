@@ -15,7 +15,7 @@
 (() => {
   const FB = 'https://www.gstatic.com/firebasejs/12.4.0/';
   const CHUNK_CHARS = 60000;      // גודל חלק (תווים). קטן = שמירה מהירה גם בטלפון
-  const FIELD_WRITES = ['Movements', 'UnknownItems', 'Orders'];   // מה שעובד שטח יכול לשנות
+  const FIELD_WRITES = ['Movements', 'UnknownItems', 'Orders', 'Docs'];   // מה שעובד שטח יכול לשנות
   const ADMIN_ONLY_TABLES = ['Log'];                               // מה שעובד שטח לא קורא
   const TMP_VER = '__ver__';
 
@@ -434,6 +434,22 @@
     return copy({ ok: true, data: { result: r.data, boot: boot.data } });
   }
 
+  // צילום מסמך: הסקריפט של גוגל יוצר PDF ב-Drive ומחזיר קישור. ההרשאה – לפי הקישור האישי או כניסת גוגל של מנהל.
+  async function uploadDoc(payload) {
+    await st.initP;
+    const req = Object.assign({ action: 'doc.upload' }, payload);
+    if (st.mode === 'field') req.token = st.token;
+    else if (st.adminKey) req.token = st.adminKey;
+    else if (st.user) req.idToken = await st.user.getIdToken();
+    let res;
+    try {
+      res = await fetch(window.APP_CONFIG.oldApiUrl, { method: 'POST', body: JSON.stringify(req) });
+    } catch (e) { throw offlineError(); }
+    let r;
+    try { r = JSON.parse(await res.text()); } catch (e) { throw offlineError(); }
+    return r;
+  }
+
   // אנשים: הקישורים האישיים והרשאות המנהל נשמרים במסמכים נפרדים (לפיהם כללי האבטחה עובדים)
   function peopleSideEffects() {
     const out = { tokens: [], admins: [] };
@@ -713,7 +729,7 @@
   }
 
   window.ENGINE = {
-    init, handle, signIn, signOut, dataState, importOld, startFresh,
+    init, handle, signIn, signOut, dataState, importOld, startFresh, uploadDoc,
     get user() { return st.user; },
     get keyAdmin() { return !!st.adminPersonId; },
     st,

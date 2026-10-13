@@ -29,7 +29,7 @@ service cloud.firestore {
       allow get: if id == '_meta' && signedIn() && resource == null;
       allow read: if isAdmin() || (isField() && resource.data.pub == true);
       allow write: if isAdmin() || firstSetup()
-        || (isField() && (id == '_meta' || id.matches('(Movements|UnknownItems|Orders)~[0-9]+')));
+        || (isField() && (id == '_meta' || id.matches('(Movements|UnknownItems|Orders|Docs)~[0-9]+')));
     }
     match /tokens/{t} {
       allow get: if signedIn();

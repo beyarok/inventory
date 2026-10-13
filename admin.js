@@ -259,6 +259,13 @@
       const cur = ix.lastPrice[p.itemId];
       if (!cur || p.at > cur.at) ix.lastPrice[p.itemId] = p;
     });
+    // מסמכים: לפי הדיווח (clientKey) ולפי הזמנה
+    ix.docsByKey = {};
+    ix.docsByOrder = {};
+    (t.Docs || []).filter(d => !d.archived).forEach(d => {
+      if (d.clientKey) (ix.docsByKey[d.clientKey] = ix.docsByKey[d.clientKey] || []).push(d);
+      if (d.orderId) (ix.docsByOrder[d.orderId] = ix.docsByOrder[d.orderId] || []).push(d);
+    });
     A.ix = ix;
   }
 
@@ -422,13 +429,16 @@
       '</table></div>';
   };
 
+  // 📎 – קישורים למסמכים שצולמו עם הדיווח
+  const docLinks = docs => (docs || []).map(d => ' <a class="doclink" href="' + esc(d.url) + '" target="_blank" rel="noopener" title="' + esc(d.name) + '">📎</a>').join('');
+
   // שורת תנועה – בבית (קצר) וברשימה המלאה (full: זמן ראשון + הערה)
   function moveRow(m, full) {
     const dead = A.ix.reversed[m.id] || m.type === 'reversal';
     const uk = !m.itemId && A.d.tables.UnknownItems.find(u => u.movementId === m.id);
     const what = esc(m.type === 'pull' && String(m.from).indexOf('P:') === 0 ? TA.usedMove : (TA.moveTypes[m.type] || m.type)) + ' ' + (m.qty ? num(m.qty) + ' ' + esc(m.itemId ? unitLabel(m.itemId) : '') + ' ' : '') +
       esc(m.itemId ? displayName(m.itemId) : uk ? '"' + uk.text + '"' : '') +
-      (A.ix.reversed[m.id] ? ' <span class="tag">' + esc(TA.reversedTag) + '</span>' : '') +
+      (A.ix.reversed[m.id] ? ' <span class="tag">' + esc(TA.reversedTag) + '</span>' : '') + docLinks(m.clientKey && A.ix.docsByKey[m.clientKey]) +
       (String(m.flags).indexOf('overdraw') >= 0 ? ' <span class="tag" style="background:var(--warn-bg);color:var(--warn)">' + esc(TA.overdrawTag) + '</span>' : '');
     const btn = '<td>' + (dead || isTmp(m.id) ? '' : '<button class="btn sm" data-a="reverseMove" data-id="' + m.id + '">' + esc(TA.undoMove) + '</button>') + '</td>';
     const who = '<td>' + esc((A.ix.people[m.byPersonId] || {}).name) + '</td>';
@@ -476,7 +486,8 @@
 
   function unknownBox(list) {
     return '<div class="box" style="margin-bottom:14px"><b>' + esc(TA.unknownTitle) + '</b><table>' + list.map(u =>
-      '<tr><td>' + esc(fmt(TA.unknownLine, { text: u.text, person: (A.ix.people[u.byPersonId] || {}).name || '', date: when(u.at) })) + '</td>' +
+      '<tr><td>' + esc(fmt(TA.unknownLine, { text: u.text, person: (A.ix.people[u.byPersonId] || {}).name || '', date: when(u.at) })) +
+        docLinks(((A.ix.moves[u.movementId] || {}).clientKey && A.ix.docsByKey[A.ix.moves[u.movementId].clientKey]) || null) + '</td>' +
       '<td class="btns" style="justify-content:flex-end"><button class="btn sm" data-a="unknownCreate" data-id="' + u.id + '">' + esc(TA.unknownCreate) + '</button>' +
       '<button class="btn sm" data-a="unknownLink" data-id="' + u.id + '">' + esc(TA.unknownLink) + '</button>' +
       '<button class="btn sm danger" data-a="unknownDelete" data-id="' + u.id + '">' + esc(TA.unknownDelete) + '</button></td></tr>').join('') + '</table></div>';
@@ -828,6 +839,15 @@
       ev.filter(e => e.at).map(e => '<div class="kv"><span>' + esc(e.text) + '</span><span class="muted">' + esc(when(e.at)) + '</span></div>').join('') + '</div>';
   }
 
+  // מסמכים של ההזמנה: מה שצולם בקבלה + מה שהמנהל צירף (למשל הצעת מחיר)
+  function orderDocs(o) {
+    const docs = (A.ix.docsByOrder[o.id] || []).slice().sort((a, b) => (a.at < b.at ? -1 : 1));
+    return '<div class="box" style="margin-top:12px"><div class="btns" style="justify-content:space-between"><h2 style="margin:0">' + esc(TA.orderDocs) + '</h2>' +
+      (window.ENGINE ? '<label class="btn">' + esc(TA.attachDoc) + '<input type="file" accept="application/pdf,image/*" multiple data-attach="' + o.id + '" hidden></label>' : '') + '</div>' +
+      (docs.length ? docs.map(d => '<div class="kv"><a class="link" href="' + esc(d.url) + '" target="_blank" rel="noopener">📎 ' + esc(d.name) + '</a><span class="muted">' +
+        esc((A.ix.people[d.byPersonId] || {}).name || '') + ' · ' + esc(when(d.at)) + '</span></div>').join('') : '<div class="muted small" style="margin-top:6px">' + esc(TA.noDocs) + '</div>') + '</div>';
+  }
+
   function orderView(o) {
     const draft = o.status === 'draft';
     const lines = linesOf(o.id);
@@ -866,6 +886,7 @@
       '<button class="btn" data-a="orderPdf">' + esc(TA.downloadPdf) + '</button>' +
       (o.status === 'sent' || o.status === 'partial' ? '<button class="btn" data-a="orderClose">' + esc(TA.closePartial) + '</button>' : '') +
       ((draft || o.status === 'sent') && !lines.some(l => A.d.receivedByLine[l.id]) ? '<button class="btn danger" data-a="orderCancel">' + esc(TA.cancelOrder) + '</button>' : '') + '</div>';
+    h += orderDocs(o);
     if (!draft) h += orderTimeline(o);
     return h;
   }
@@ -1156,6 +1177,16 @@
         '<select class="in" id="movesType" style="max-width:160px"><option value="">' + esc(TA.allTypes) + '</option>' +
         Object.keys(TA.moveTypes).filter(k => k !== 'reversal').map(k => '<option value="' + k + '"' + (A.movesType === k ? ' selected' : '') + '>' + esc(TA.moveTypes[k]) + '</option>').join('') + '</select></div>' +
         '<div id="movesBody">' + movesTable() + '</div>';
+      return h;
+    }
+    if (A.archTab === 'docs') {
+      const words = norm(A.docsQ || '').split(' ').filter(Boolean);
+      const docs = (A.d.tables.Docs || []).filter(d => !d.archived && words.every(w => norm(d.name + ' ' + ((A.ix.people[d.byPersonId] || {}).name || '')).indexOf(w) >= 0))
+        .slice().sort((a, b) => (a.at < b.at ? 1 : -1));
+      h += '<input class="in" id="docsQ" style="max-width:260px" placeholder="' + esc(TA.docsSearch) + '" value="' + esc(A.docsQ || '') + '"></div>' +
+        '<div class="box" style="padding:0;overflow:auto"><table><tr><th>' + esc(TA.cDate) + '</th><th>' + esc(TA.cDoc) + '</th><th>' + esc(TA.cWho) + '</th></tr>' +
+        (docs.length ? docs.slice(0, 300).map(d => '<tr><td class="muted small" style="white-space:nowrap">' + esc(when(d.at)) + '</td><td><a class="link" href="' + esc(d.url) + '" target="_blank" rel="noopener">📎 ' + esc(d.name) + '</a></td><td>' +
+          esc((A.ix.people[d.byPersonId] || {}).name || '') + '</td></tr>').join('') : '<tr><td colspan="3" class="muted">' + esc(TA.noDocs) + '</td></tr>') + '</table></div>';
       return h;
     }
     if (A.archTab === 'log') {
@@ -2113,6 +2144,60 @@
       bg.addEventListener('click', ev => { if (ev.target.closest('[data-close]')) closeModal(); });
     }
   };
+  // צירוף מסמך להזמנה (PDF כמו שהוא; תמונות – הופכות ל-PDF)
+  document.addEventListener('change', async e => {
+    const inp = e.target.closest && e.target.closest('input[data-attach]');
+    if (!inp || !inp.files.length || !window.ENGINE) return;
+    const o = A.ix.orders[inp.dataset.attach];
+    const files = [...inp.files];
+    const sup = (A.ix.sups[o.supplierId] || {}).name || '';
+    const base = fmt(TA.attachName, { number: o.number, supplier: sup, who: A.d.me.name, date: new Date().toLocaleDateString('he-IL') });
+    saving++; syncState();
+    try {
+      const pdfs = files.filter(f => f.type === 'application/pdf');
+      const imgs = files.filter(f => f.type.indexOf('image/') === 0);
+      const jobs = pdfs.map(f => ({ pdf: f }));
+      if (imgs.length) jobs.push({ imgs });
+      for (const j of jobs) {
+        const payload = { name: base + (jobs.length > 1 && j.pdf ? ' · ' + j.pdf.name.replace(/\.pdf$/i, '') : '') };
+        if (j.pdf) payload.pdf = await fileB64(j.pdf);
+        else payload.images = await Promise.all(j.imgs.map(shrinkImg));
+        const r = await window.ENGINE.uploadDoc(payload);
+        if (!r.ok) { toast(r.error || TA.error, true); continue; }
+        await mutate('admin.doc.add', { doc: { fileId: r.data.fileId, url: r.data.url, name: payload.name, kind: 'order', orderId: o.id } }, TA.docAttached);
+      }
+    } catch (err) {
+      toast(TA.error, true);
+    } finally {
+      saving--; syncState();
+    }
+  });
+  function fileB64(f) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(',')[1]);
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(f);
+    });
+  }
+  function shrinkImg(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        const k = Math.min(1, 1600 / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * k);
+        c.height = Math.round(img.height * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        resolve(c.toDataURL('image/jpeg', 0.72).split(',')[1]);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('img')); };
+      img.src = url;
+    });
+  }
+
   // דיווחים עם "פרויקט אחר" – המנהל משייך לפרויקט
   H.noProjectList = () => {
     const list = digest().noProject;
@@ -2234,6 +2319,12 @@
     } else if (e.target.id === 'logQ') {
       A.logQ = e.target.value;
       document.getElementById('logBody').innerHTML = logTable();
+    } else if (e.target.id === 'docsQ') {
+      A.docsQ = e.target.value;
+      render();
+      const c = document.getElementById('docsQ');
+      c.focus();
+      c.setSelectionRange(c.value.length, c.value.length);
     } else if (e.target.id === 'helpQ') {
       A.helpQ = e.target.value;
       render();

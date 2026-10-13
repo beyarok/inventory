@@ -14,6 +14,7 @@
 
   const svg = p => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + p + '</svg>';
   const ICON = {
+    camera: svg('<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>'),
     used: svg('<path d="M5 12l4 4 10-10"/>'),
     take: svg('<path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M4 20h16"/>'),
     return: svg('<path d="M9 14l-5-5 5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>'),
@@ -178,11 +179,12 @@
 
   // "אין קליטה" רק כשהטלפון באמת בלי רשת. אחרת – הודעה שקטה שהדיווחים בדרך.
   function banners() {
-    if (!S.queue.length) return '';
+    const docs = DOCS.count ? '<div class="banner info">' + ICON.camera + '<span class="grow">' + esc(fmt(TX.docsSending, { n: DOCS.count })) + '</span></div>' : '';
+    if (!S.queue.length) return docs;
     if (navigator.onLine === false) {
       return '<div class="banner warn">' + ICON.cloud + '<span class="grow">' + esc(fmt(TX.offline, { n: S.queue.length })) + '</span></div>';
     }
-    return '<div class="banner info">' + ICON.cloud + '<span class="grow">' + esc(fmt(TX.sending, { n: S.queue.length })) + '</span></div>';
+    return '<div class="banner info">' + ICON.cloud + '<span class="grow">' + esc(fmt(TX.sending, { n: S.queue.length })) + '</span></div>' + docs;
   }
 
   function itemRow(id, opts) {
@@ -463,6 +465,7 @@
       if (v.action === 'purchase') h += '<div class="hint">' + esc(TX.priceHint) + '</div>';
     }
     const noteOpen = v.supplierId === '_other' || v.noteOpen;
+    if (v.unknownText || PHOTO_ACTIONS.indexOf(v.action) >= 0) h += photosHtml(v);
     h += noteOpen
       ? '<div class="field"><div class="label">' + esc(TX.note) + '</div><input id="note" class="text" maxlength="300" value="' + esc(v.note || '') + '"></div>'
       : '<button class="link" data-a="noteOpen" style="text-align:right;padding:4px 0">' + esc(TX.note) + '</button>';
@@ -533,6 +536,7 @@
         '<input data-line="' + x.line.id + '" type="number" inputmode="numeric" min="0" value="' + esc(v.qtys[x.line.id]) + '" style="width:64px;font-size:18px">' +
         '<button data-a="lineStep" data-id="' + x.line.id + '" data-d="-1" style="width:40px;height:40px;font-size:20px">−</button></span></div>').join('') +
       '</div><div class="field"><div class="label">' + esc(TX.arrivedTo) + '</div>' + chipsHtml('to', locChips(STOCK_TYPES), v.to) + '</div>' +
+      photosHtml(v) +
       '<div id="err" class="error"></div><button class="send" data-a="receiveGo">' + esc(TX.confirmReceive) + '</button></main>';
   };
 
@@ -785,6 +789,7 @@
     };
     const label = per > 1 ? num(typed) + ' ' + item(v.itemId).buyUnitName + ' (' + qtyLabel(qty, v.itemId) + ')'
       : s.counted ? num(qty) : qtyLabel(qty, v.itemId);
+    queueDoc(v, m.clientKey, '', v.unknownText ? TX.docKinds.unknown + ' · ' + v.unknownText : TX.docKinds[s.what ? v.what : v.action] + (v.itemId ? ' · ' + item(v.itemId).name : ''));
     enqueue([m], fmt(TX.sent, { qty: label, item: v.itemId ? displayName(v.itemId) : v.unknownText }));
   }
 
@@ -801,6 +806,7 @@
     const o = S.ix.orders[v.orderId];
     // מה עוד חסר אחרי הקבלה הזו (ההזמנה נסגרת לבד כשהכל הגיע)
     const missing = lines.filter(x => (Number(v.qtys[x.line.id]) || 0) < x.remaining).length;
+    queueDoc(v, ms[0].clientKey, o.id, TX.docKinds.receive + ' · ' + fmt(TX.orderNo, { number: o.number }) + ' · ' + ((S.ix.sups[o.supplierId] || {}).name || ''));
     enqueue(ms, missing ? fmt(TX.receivedSome, { number: o.number, n: missing }) : fmt(TX.receivedAll, { number: o.number }));
   }
 
@@ -970,6 +976,110 @@
     }
   }
 
+  // ---------- צילום מסמכים ----------
+  // צילומים מוקטנים בטלפון, נשמרים בתור (IndexedDB – גם בלי קליטה), והסקריפט של גוגל הופך אותם ל-PDF ב-Drive.
+  const PHOTO_ACTIONS = ['purchase', 'broken', 'returnSupplier'];
+  const DOCS = { count: 0, busy: false };
+
+  function photosHtml(v) {
+    if (!window.ENGINE) return '';
+    const ph = v.photos || [];
+    return '<div class="field"><div class="label">' + esc(TX.photoLabel) + '</div>' +
+      (ph.length ? '<div class="thumbs">' + ph.map((p, i) => '<span class="thumb"><img src="data:image/jpeg;base64,' + p + '" alt=""><button data-a="photoRemove" data-i="' + i + '">✕</button></span>').join('') + '</div>' : '') +
+      '<label class="photobtn">' + ICON.camera + esc(ph.length ? TX.photoMore : TX.photoAdd) +
+      '<input type="file" accept="image/*" capture="environment" multiple data-photo hidden></label></div>';
+  }
+  H.photoRemove = el => { const v = cur(); readInputs(v); v.photos.splice(Number(el.dataset.i), 1); render(); };
+  document.addEventListener('change', async e => {
+    if (!e.target.matches('input[data-photo]')) return;
+    const v = cur();
+    readInputs(v);
+    v.photos = v.photos || [];
+    for (const f of [...e.target.files].slice(0, 10)) {
+      try { v.photos.push(await shrink(f)); } catch (err) { /* קובץ שאינו תמונה */ }
+    }
+    render();
+  });
+  // מקטינים לרוחב/גובה 1600 – מספיק לקריאה, וקטן לשליחה
+  function shrink(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        const k = Math.min(1, 1600 / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * k);
+        c.height = Math.round(img.height * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        resolve(c.toDataURL('image/jpeg', 0.72).split(',')[1]);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('img')); };
+      img.src = url;
+    });
+  }
+
+  // תור המסמכים
+  function idb() {
+    return new Promise((resolve, reject) => {
+      const r = indexedDB.open('inv-docs', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('q', { keyPath: 'id' });
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+  }
+  async function idbDo(mode, fn) {
+    const db = await idb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('q', mode);
+      const out = fn(tx.objectStore('q'));
+      tx.oncomplete = () => resolve(out && out.result !== undefined ? out.result : out);
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+  const pad2 = n => String(n).padStart(2, '0');
+  function stamp() {
+    const d = new Date();
+    return pad2(d.getDate()) + '.' + pad2(d.getMonth() + 1) + '.' + d.getFullYear() + ' ' + pad2(d.getHours()) + '-' + pad2(d.getMinutes());
+  }
+  // שם אוטומטי: איזה טופס · על מה · מי · מתי
+  function queueDoc(v, clientKey, orderId, what) {
+    if (!v.photos || !v.photos.length || !window.ENGINE) return;
+    const job = { id: uuid(), clientKey, orderId: orderId || '', kind: v.unknownText ? 'unknown' : v.action || 'receive',
+      name: what + ' · ' + S.data.me.name + ' · ' + stamp(), images: v.photos.slice(), token: S.token };
+    v.photos = [];
+    idbDo('readwrite', st => st.put(job)).then(() => { DOCS.count += 1; flushDocs(); }).catch(() => { /* אין אחסון – מוותרים על המסמך */ });
+  }
+  async function flushDocs() {
+    if (DOCS.busy || !window.ENGINE) return;
+    DOCS.busy = true;
+    try {
+      const jobs = (await idbDo('readonly', st => st.getAll())).filter(j => j.token === S.token);
+      DOCS.count = jobs.length;
+      for (const j of jobs) {
+        if (navigator.onLine === false) break;
+        // 1. הקובץ ל-Drive (פעם אחת – אם כבר עלה, יש לו fileId)
+        if (!j.fileId) {
+          const r = await window.ENGINE.uploadDoc({ name: j.name, images: j.images });
+          if (!r.ok) { if (r.code === 'AUTH') await idbDo('readwrite', st => st.delete(j.id)); continue; }
+          j.fileId = r.data.fileId;
+          j.url = r.data.url;
+          j.images = [];
+          await idbDo('readwrite', st => st.put(j));
+        }
+        // 2. רישום במערכת
+        const r2 = await api('field.doc', { doc: { fileId: j.fileId, url: j.url, kind: j.kind, name: j.name, orderId: j.orderId, clientKey: j.clientKey } });
+        if (r2.ok || r2.code === 'AUTH') await idbDo('readwrite', st => st.delete(j.id));
+      }
+      DOCS.count = (await idbDo('readonly', st => st.getAll())).filter(j => j.token === S.token).length;
+    } catch (e) {
+      /* אין קליטה – ננסה שוב */
+    } finally {
+      DOCS.busy = false;
+      if (cur().v === 'home') render();
+    }
+  }
+
   // ---------- הפעלה ----------
   function start() {
     if (!S.token) { S.fatal = TX.noLink; render(); return; }
@@ -980,7 +1090,9 @@
     render();
     // קודם שולחים מה שמחכה (התשובה מביאה גם נתונים טריים); אם אין מה לשלוח – רק מרעננים
     if (S.queue.length) flush(); else refresh();
-    const onNet = () => { if (cur().v === 'home') render(); if (navigator.onLine) flush(); };
+    flushDocs();
+    setInterval(flushDocs, 30000);
+    const onNet = () => { if (cur().v === 'home') render(); if (navigator.onLine) { flush(); flushDocs(); } };
     window.addEventListener('online', onNet);
     window.addEventListener('offline', onNet);
     // חזרה לאפליקציה: שולחים מיד, ומרעננים אם עברו יותר מדקה
