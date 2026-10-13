@@ -177,3 +177,18 @@ table.countsheet td.blankcell { min-width: 90px; border-right: 1px solid var(--l
 }
 
 .doclink { text-decoration: none; }
+
+/* הזמנה: רמז מתחת לפריט, שדות ששונו, בחירה */
+.hintline { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.hintline .cheaper { color: var(--ok); font-weight: 600; }
+.hintline .pricier { color: var(--danger); }
+input.in.num { width: 90px; }
+input.in.pct { width: 64px; }
+input.in.changed { background: var(--warn-bg); border-color: #E9C46A; }
+.rowcheck { width: 18px; height: 18px; cursor: pointer; }
+tr.sel td { background: var(--green-bg); }
+.selbar { position: sticky; top: 0; z-index: 5; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; background: var(--green); color: #fff; padding: 8px 12px; border-radius: 10px; margin-bottom: 8px; }
+.selbar .btn { background: #fff; color: var(--green-dark); border-color: #fff; }
+.selbar .grow { flex: 1; font-size: 13px; opacity: .9; }
+.toast.undo { display: flex; gap: 12px; align-items: center; bottom: 70px; }
+.toast.undo button { color: var(--leaf); text-decoration: underline; font-weight: 600; }

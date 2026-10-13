@@ -23,14 +23,17 @@ const SCHEMA = {
   ContainerProjects: ['id', 'containerId', 'projectId', 'from', 'to'],
   People: ['id', 'name', 'role', 'email', 'token', 'alerts:b', 'archived:b'],
   Projects: ['id', 'name', 'status', 'openedAt', 'closedAt', 'note', 'archived:b'],
-  Suppliers: ['id', 'name', 'phone', 'contact', 'note', 'archived:b'],
+  Suppliers: ['id', 'name', 'phone', 'contact', 'note', 'archived:b', 'email', 'vatId', 'address'],
+  // מחירון ספק: לכל ספק ופריט – קוד אצל הספק, מחיר מחירון והנחה רגילה (ליחידת קנייה, לפני מע"מ)
+  SupplierItems: ['id', 'supplierId', 'itemId', 'code', 'listPrice:n', 'discount:n', 'updatedAt', 'archived:b'],
   Movements: ['id', 'at', 'clientAt', 'clientKey', 'type', 'itemId', 'qty:n', 'from', 'to', 'projectId',
     'byPersonId', 'orderId', 'orderLineId', 'unitPrice:n', 'supplierId', 'note', 'reversesId', 'flags'],
   UnknownItems: ['id', 'text', 'movementId', 'byPersonId', 'at', 'status', 'itemId'],
   Orders: ['id', 'number:n', 'supplierId', 'destId', 'status', 'pricesIncludeVat:b', 'vatRate:n',
     'createdBy', 'createdAt', 'sentAt', 'closedAt', 'note'],
-  OrderLines: ['id', 'orderId', 'itemId', 'qtyBuy:n', 'buyUnitQty:n', 'unitPriceBuy:n'],
-  Prices: ['id', 'itemId', 'supplierId', 'at', 'unitPrice:n', 'source', 'refId'],
+  // unitPriceBuy = נטו (מחירון פחות הנחה). listPrice/discount – מה שסגרו בהזמנה הזו. saveToList – לעדכן את מחירון הספק בשליחה
+  OrderLines: ['id', 'orderId', 'itemId', 'qtyBuy:n', 'buyUnitQty:n', 'unitPriceBuy:n', 'listPrice:n', 'discount:n', 'saveToList:b'],
+  Prices: ['id', 'itemId', 'supplierId', 'at', 'unitPrice:n', 'source', 'refId', 'listPrice:n', 'discount:n', 'qty:n'],
   Settings: ['key', 'value'],
   Log: ['at', 'byPersonId', 'action', 'entity', 'entityId', 'summary', 'before', 'after'],
   // מסמכים מצולמים (PDF ב-Drive): קבלת סחורה, קנייה בחנות, נזק, פריט לא מוכר, הצעת מחיר...
@@ -39,7 +42,7 @@ const SCHEMA = {
 
 const ID_PREFIX = {
   Items: 'IT', Units: 'UN', Locations: 'LC', ContainerProjects: 'CP', People: 'PE', Projects: 'PR',
-  Suppliers: 'SU', Movements: 'MV', UnknownItems: 'UK', Orders: 'OR', OrderLines: 'OL', Prices: 'PC', Docs: 'DC',
+  Suppliers: 'SU', Movements: 'MV', UnknownItems: 'UK', Orders: 'OR', OrderLines: 'OL', Prices: 'PC', Docs: 'DC', SupplierItems: 'SI',
 };
 
 const DEFAULT_SETTINGS = {
@@ -49,6 +52,7 @@ const DEFAULT_SETTINGS = {
   digestHour: '7',
   nextOrderNumber: '1',
   companyName: 'אומנויות בירוק בע"מ',
+  companyDetails: '',   // פרטי החברה במסמך הזמנה לספק (כתובת, ח.פ., טלפון)
   lastDigestAt: '',
 };
 
@@ -764,7 +768,8 @@ function addDoc_(d, actor) {
 // ==================== Orders.gs ====================
 // הזמנות: טיוטה › נשלחה › התקבלה חלקית › התקבלה (או: בוטלה / נסגרה חלקית)
 
-// data: { id?, supplierId, destId, pricesIncludeVat, note, lines: [{ id?, itemId, qtyBuy, unitPriceBuy }] }
+// data: { id?, supplierId, destId, pricesIncludeVat, note, lines: [{ id?, itemId, qtyBuy, listPrice, discount, saveToList | unitPriceBuy }] }
+// מחיר: אם יש listPrice – הנטו מחושב ממנו ומההנחה; אחרת unitPriceBuy כמו שהוא (הזמנות ישנות).
 // שורה שהכמות שלה 0 נחשבת מחוקה.
 function saveOrder_(data, actor) {
   const supplier = Db.byId('Suppliers', data.supplierId);
@@ -794,22 +799,37 @@ function saveOrder_(data, actor) {
   const newLines = [];
   (data.lines || []).forEach(l => {
     const qty = Number(l.qtyBuy) || 0;
-    const price = l.unitPriceBuy === '' || l.unitPriceBuy === null || l.unitPriceBuy === undefined ? null : Number(l.unitPriceBuy);
+    const p = linePrice_(l);
     if (l.id && existing[l.id]) {
-      Db.update('OrderLines', l.id, { qtyBuy: qty, unitPriceBuy: price });
+      Db.update('OrderLines', l.id, Object.assign({ qtyBuy: qty }, p));
       delete existing[l.id];
       return;
     }
     if (!qty) return;
     const it = Model.item(l.itemId);
     if (!it || it.archived || !Model.isLeaf(it.id)) userError_(MSG.missing + 'פריט');
-    newLines.push({ orderId: order.id, itemId: it.id, qtyBuy: qty, buyUnitQty: it.buyUnitQty || 1, unitPriceBuy: price });
+    newLines.push(Object.assign({ orderId: order.id, itemId: it.id, qtyBuy: qty, buyUnitQty: it.buyUnitQty || 1 }, p));
   });
   // שורות שלא נשלחו שוב = הוסרו מהטיוטה
   Object.keys(existing).forEach(id => Db.update('OrderLines', id, { qtyBuy: 0 }));
   Db.insertMany('OrderLines', newLines);
   log_(actor, data.id ? 'update' : 'create', 'Orders', order.id, 'הזמנה ' + order.number + ' · ' + supplier.name);
   return order;
+}
+
+const num_ = v => (v === '' || v === null || v === undefined || isNaN(Number(v)) ? null : Number(v));
+
+// מחיר שורה: מחירון + הנחה → נטו
+function linePrice_(l) {
+  const list = num_(l.listPrice);
+  if (list === null) return { unitPriceBuy: num_(l.unitPriceBuy), listPrice: null, discount: null, saveToList: false };
+  const discount = Math.min(100, Math.max(0, num_(l.discount) || 0));
+  return { listPrice: list, discount, unitPriceBuy: round2_(list * (1 - discount / 100)), saveToList: !!l.saveToList };
+}
+
+// מחירון הספק לפריט (או null)
+function supplierItem_(supplierId, itemId) {
+  return Db.all('SupplierItems').find(x => x.supplierId === supplierId && x.itemId === itemId) || null;
 }
 
 function orderLines_(orderId) {
@@ -832,8 +852,15 @@ function setOrderStatus_(id, action, actor) {
     // המחירים נכנסים להיסטוריה ברגע השליחה – מכאן נבנית השוואת הספקים
     Db.insertMany('Prices', lines.filter(l => l.unitPriceBuy !== null).map(l => ({
       itemId: l.itemId, supplierId: order.supplierId, at, unitPrice: unitPriceFromLine_(l, order),
-      source: 'order', refId: l.id,
+      source: 'order', refId: l.id, listPrice: l.listPrice, discount: l.discount, qty: l.qtyBuy,
     })));
+    // מחירון הספק: מה שסומן "עדכן במחירון", ופריט שעוד לא היה במחירון שלו
+    lines.filter(l => l.listPrice !== null).forEach(l => {
+      const cur = supplierItem_(order.supplierId, l.itemId);
+      if (cur && !l.saveToList) return;
+      if (cur) Db.update('SupplierItems', cur.id, { listPrice: l.listPrice, discount: l.discount, updatedAt: at, archived: false });
+      else Db.insert('SupplierItems', { supplierId: order.supplierId, itemId: l.itemId, code: '', listPrice: l.listPrice, discount: l.discount, updatedAt: at });
+    });
   } else if (action === 'cancel') {
     if (anyReceived) userError_('כבר התקבלו פריטים מההזמנה הזו. אפשר לסגור אותה במקום לבטל.');
     if (['draft', 'sent'].indexOf(order.status) < 0) userError_('אי אפשר לבטל את ההזמנה הזו');
@@ -867,59 +894,87 @@ const ORDER_STATUS_NAMES = {
   closed_partial: 'נסגרה חלקית', canceled: 'בוטלה',
 };
 
-// PDF פנימי של ההזמנה, מוחזר כ-base64 להורדה בדפדפן
+// מסמך הזמנה לספק (נפתח להדפסה / שמירה כ-PDF). קודי הספק, מחירון, הנחה ונטו לכל שורה.
 function orderPdf_(id) {
   const order = Db.byId('Orders', id);
   if (!order) userError_(MSG.missing + 'הזמנה');
   const supplier = Db.byId('Suppliers', order.supplierId) || {};
   const dest = Db.byId('Locations', order.destId) || {};
   const by = Db.byId('People', order.createdBy) || {};
-  const received = Model.receivedByLine();
   const esc = s => String(s === null || s === undefined ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const money = n => (n === null || n === undefined ? '' : '₪' + Number(n).toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
   const vat = (order.vatRate || 0) / 100;
+  const lines = orderLines_(id);
+  const anyDiscount = lines.some(l => l.discount);
 
   let total = 0;
-  const rows = orderLines_(id).map((l, i) => {
+  const rows = lines.map((l, i) => {
     const it = Model.item(l.itemId) || {};
     const per = l.buyUnitQty || 1;
     const unitName = per > 1 ? it.buyUnitName || '' : (Db.byId('Units', Model.inherited(l.itemId, 'unitId')) || {}).name || '';
-    const got = (received[l.id] || 0) / per;
+    const code = (supplierItem_(order.supplierId, l.itemId) || {}).code || '';
     const sum = l.unitPriceBuy === null ? null : l.unitPriceBuy * l.qtyBuy;
     if (sum !== null) total += sum;
-    return '<tr><td>' + (i + 1) + '</td><td>' + esc(it.name) + '</td><td class="q">' +
-      esc(Model.path(l.itemId).slice(0, -1).join(' › ')) + '</td><td>' + l.qtyBuy + '</td><td>' +
-      (Math.round(got * 100) / 100) + '</td><td>' + esc(unitName) + '</td><td>' + money(l.unitPriceBuy) +
-      '</td><td>' + money(sum) + '</td></tr>';
+    const list = l.listPrice !== null ? l.listPrice : l.unitPriceBuy;
+    return '<tr><td>' + (i + 1) + '</td><td class="c">' + esc(code) + '</td><td>' + esc(it.name) + '</td><td>' + Number(l.qtyBuy).toLocaleString('he-IL') +
+      '</td><td>' + esc(unitName === 'יחידה' ? '' : unitName) + '</td>' +
+      (anyDiscount ? '<td>' + money(list) + '</td><td>' + (l.discount ? l.discount + '%' : '') + '</td>' : '') +
+      '<td>' + money(l.unitPriceBuy) + '</td><td>' + money(sum) + '</td></tr>';
   }).join('');
   const before = order.pricesIncludeVat ? total / (1 + vat) : total;
   const after = order.pricesIncludeVat ? total : total * (1 + vat);
+  const date = String(order.sentAt || order.createdAt).slice(0, 10).split('-').reverse().join('.');
+  const details = String(Db.setting('companyDetails') || '');
 
   const html = '<html dir="rtl"><head><meta charset="utf-8"><style>' +
-    'body{font-family:Arial,sans-serif;color:#2b2118;font-size:12px;margin:24px}' +
-    'h1{color:#4A3524;font-size:20px;margin:0 0 4px}.co{color:#6A9A3A;font-weight:bold;margin-bottom:12px}' +
-    '.d{margin:2px 0}table{width:100%;border-collapse:collapse;margin-top:14px}' +
-    'th{background:#4A3524;color:#fff;padding:6px;text-align:right}td{border-bottom:1px solid #E4DED2;padding:6px}' +
-    '.q{color:#8A7A68}.t{margin-top:12px;text-align:left;line-height:1.8}.f{margin-top:24px;color:#8A7A68;font-size:10px}' +
+    '@page{size:A4;margin:14mm}body{font-family:Arial,sans-serif;color:#2b2118;font-size:12px;margin:0}' +
+    '.top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #4A3524;padding-bottom:10px}' +
+    '.co{color:#4A3524;font-size:20px;font-weight:bold}.cd{color:#8A7A68;font-size:11px;white-space:pre-line;margin-top:2px}' +
+    'h1{font-size:18px;margin:0;color:#4A3524;text-align:left}.meta{text-align:left;color:#555;font-size:11px;line-height:1.6}' +
+    '.box{display:flex;gap:30px;margin:14px 0;line-height:1.7}.box b{color:#4A3524}' +
+    'table{width:100%;border-collapse:collapse;margin-top:6px}th{background:#4A3524;color:#fff;padding:6px;text-align:right;font-weight:normal}' +
+    'td{border-bottom:1px solid #E4DED2;padding:6px}td.c{color:#8A7A68;font-size:11px}' +
+    '.t{margin-top:12px;text-align:left;line-height:1.9}.t b{font-size:14px}.n{margin-top:14px}.f{margin-top:26px;color:#8A7A68;font-size:10px}' +
     '</style></head><body>' +
-    '<div class="co">' + esc(Db.setting('companyName')) + '</div>' +
-    '<h1>הזמנה ' + order.number + ' · ' + esc(supplier.name) + '</h1>' +
-    '<div class="d">תאריך הזמנה: ' + esc(String(order.sentAt || order.createdAt).slice(0, 10)) + '</div>' +
-    '<div class="d">ספק: ' + esc(supplier.name) + (supplier.phone ? ' · ' + esc(supplier.phone) : '') + '</div>' +
-    '<div class="d">הוזמן ע"י ' + esc(by.name) + ' · יעד: ' + esc(dest.name) + ' · מצב: ' + ORDER_STATUS_NAMES[order.status] + '</div>' +
-    '<table><tr><th>#</th><th>פריט</th><th>קבוצה</th><th>הוזמן</th><th>התקבל</th><th>יחידה</th><th>מחיר ליחידה</th><th>סה"כ</th></tr>' +
+    '<div class="top"><div><div class="co">' + esc(Db.setting('companyName')) + '</div>' + (details ? '<div class="cd">' + esc(details) + '</div>' : '') + '</div>' +
+    '<div><h1>הזמנת רכש מס\' ' + order.number + '</h1><div class="meta">תאריך: ' + esc(date) + '</div></div></div>' +
+    '<div class="box"><div><b>לכבוד:</b> ' + esc(supplier.name) +
+    (supplier.contact ? '<br>' + esc(supplier.contact) : '') + (supplier.phone ? '<br>טל\' ' + esc(supplier.phone) : '') + (supplier.email ? '<br>' + esc(supplier.email) : '') + '</div>' +
+    '<div><b>לאספקה ל:</b> ' + esc(dest.name) + (dest.address ? '<br>' + esc(dest.address) : '') + '<br><b>הזמין:</b> ' + esc(by.name) + '</div></div>' +
+    '<table><tr><th>#</th><th>קוד ספק</th><th>תיאור</th><th>כמות</th><th>יחידה</th>' + (anyDiscount ? '<th>מחירון</th><th>הנחה</th>' : '') + '<th>מחיר ליח\'</th><th>סה"כ</th></tr>' +
     rows + '</table>' +
     '<div class="t">סה"כ לפני מע"מ: ' + money(before) + '<br>מע"מ ' + order.vatRate + '%: ' + money(after - before) +
     '<br><b>סה"כ כולל מע"מ: ' + money(after) + '</b></div>' +
-    (order.note ? '<div class="d" style="margin-top:12px">הערות להזמנה: ' + esc(order.note) + '</div>' : '') +
-    '<div class="f">הופק ב-' + Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'dd.MM.yyyy HH:mm') + ' · לשימוש פנימי</div>' +
+    (order.note ? '<div class="n"><b>הערות:</b> ' + esc(order.note) + '</div>' : '') +
+    '<div class="f">הופק ב-' + Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'dd.MM.yyyy HH:mm') + '</div>' +
     '</body></html>';
   const pdf = Utilities.newBlob(html, 'text/html', 'order.html').getAs('application/pdf');
   return {
     fileName: 'הזמנה ' + order.number + ' - ' + (supplier.name || '') + '.pdf',
     base64: Utilities.base64Encode(pdf.getBytes()),
   };
+}
+
+// עריכת מחירון ספק (מכרטיס הספק). rows: [{ itemId, code?, listPrice?, discount?, remove? }] – כמה פריטים בפעולה אחת
+function saveSupplierItems_(supplierId, rows, actor) {
+  const sup = Db.byId('Suppliers', supplierId);
+  if (!sup) userError_(MSG.missing + 'ספק');
+  const at = now_();
+  (rows || []).slice(0, 500).forEach(r => {
+    const it = Model.item(r.itemId);
+    if (!it) userError_(MSG.missing + 'פריט');
+    const cur = Db.all('SupplierItems', { includeArchived: true }).find(x => x.supplierId === sup.id && x.itemId === it.id);
+    if (r.remove) { if (cur) Db.update('SupplierItems', cur.id, { archived: true, updatedAt: at }); return; }
+    const patch = { updatedAt: at, archived: false };
+    if (r.code !== undefined) patch.code = String(r.code || '').trim().slice(0, 60);
+    if (r.listPrice !== undefined) patch.listPrice = num_(r.listPrice);
+    if (r.discount !== undefined) patch.discount = Math.min(100, Math.max(0, num_(r.discount) || 0));
+    if (cur) Db.update('SupplierItems', cur.id, patch);
+    else Db.insert('SupplierItems', Object.assign({ supplierId: sup.id, itemId: it.id, code: '', listPrice: null, discount: 0 }, patch));
+  });
+  log_(actor, 'priceList', 'Suppliers', sup.id, 'מחירון ' + sup.name + ' · ' + (rows || []).length + ' פריטים');
+  return Db.clean(Db.all('SupplierItems').filter(x => x.supplierId === sup.id));
 }
 
 // ==================== Admin.gs ====================
@@ -930,7 +985,7 @@ const EDITABLE = {
   Units: ['name'],
   Locations: ['name', 'type', 'address'],
   People: ['name', 'role', 'email', 'alerts'],
-  Suppliers: ['name', 'phone', 'contact', 'note'],
+  Suppliers: ['name', 'phone', 'contact', 'note', 'email', 'vatId', 'address'],
   Projects: ['name', 'note'],
   Items: ['parentId', 'name', 'kind', 'unitId', 'buyUnitName', 'buyUnitQty', 'minQty', 'aliases', 'imageId', 'value', 'sort', 'isFolder'],
 };
@@ -1244,14 +1299,14 @@ function newPersonToken_(id, actor) {
   return Db.byId('People', id);
 }
 
-const EDITABLE_SETTINGS = ['vatRate', 'lateDays', 'stalePriceMonths', 'digestHour', 'companyName'];
+const EDITABLE_SETTINGS = ['vatRate', 'lateDays', 'stalePriceMonths', 'digestHour', 'companyName', 'companyDetails'];
 
 function saveSettings_(values, actor) {
   const before = Db.settings();
   EDITABLE_SETTINGS.forEach(k => {
     if (values[k] === undefined) return;
     const v = String(values[k]).trim();
-    if (k !== 'companyName' && !(Number(v) >= 0)) userError_(MSG.missing + k);
+    if (k !== 'companyName' && k !== 'companyDetails' && !(Number(v) >= 0)) userError_(MSG.missing + k);
     if (k === 'digestHour' && !(Number(v) >= 0 && Number(v) <= 23)) userError_(MSG.missing + 'שעה');
     Db.setSetting(k, v);
   });
@@ -1342,6 +1397,7 @@ const ADMIN_ACTIONS = {
   'admin.unknown.resolve': (req, me) => strip_(resolveUnknown_(req.id, req.itemId, me)),
   'admin.purchase.setPrice': (req, me) => strip_(setPurchasePrice_(req.movementId, req.unitPrice, req.includesVat, req.supplierId, me)),
   'admin.order.save': (req, me) => strip_(saveOrder_(req.order || {}, me)),
+  'admin.supplierItems.save': (req, me) => saveSupplierItems_(req.supplierId, req.rows || [], me),
   'admin.order.status': (req, me) => strip_(setOrderStatus_(req.id, req.status, me)),
   'admin.order.pdf': (req) => orderPdf_(req.id),
   'admin.project.status': (req, me) => strip_(setProjectStatus_(req.id, req.status, me)),
@@ -1443,7 +1499,7 @@ function adminBootstrap_(me) {
   const ver = dataVersion_();
   const tables = {};
   ['Items', 'Units', 'Locations', 'ContainerProjects', 'People', 'Projects', 'Suppliers', 'Movements',
-    'UnknownItems', 'Orders', 'OrderLines', 'Prices', 'Docs'].forEach(name => {
+    'UnknownItems', 'Orders', 'OrderLines', 'Prices', 'Docs', 'SupplierItems'].forEach(name => {
     tables[name] = Db.clean(Db.all(name, { includeArchived: true }));
   });
   const log = Db.all('Log');

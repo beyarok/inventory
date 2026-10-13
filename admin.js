@@ -259,6 +259,9 @@
       const cur = ix.lastPrice[p.itemId];
       if (!cur || p.at > cur.at) ix.lastPrice[p.itemId] = p;
     });
+    // מחירון ספקים: ספק|פריט
+    ix.supItems = {};
+    (t.SupplierItems || []).forEach(x => { if (!x.archived) ix.supItems[x.supplierId + '|' + x.itemId] = x; });
     // מסמכים: לפי הדיווח (clientKey) ולפי הזמנה
     ix.docsByKey = {};
     ix.docsByOrder = {};
@@ -341,6 +344,10 @@
     if (!A.d) { app.innerHTML = '<div class="center muted">' + esc(TA.loading) + '</div>'; return; }
     const dg = digest();
     const badge = { home: 0, items: dg.unknown.length, orders: dg.late.length + dg.missingPrice.length };
+    // שדה שמקלידים בו נשאר בפוקוס (עם מה שהוקלד) גם כשהמסך מתעדכן ברקע
+    const ae = document.activeElement;
+    const keepAttr = ae && ae.matches && ['data-olf', 'data-plf', 'data-od'].find(a => ae.hasAttribute(a));
+    const keep = keepAttr ? { sel: 'main [' + keepAttr + '="' + ae.getAttribute(keepAttr) + '"]' + (ae.dataset.key !== undefined ? '[data-key="' + ae.dataset.key + '"]' : ''), value: ae.value, type: ae.type } : null;
     app.innerHTML = '<div class="topbar"><button data-a="menu">' + ICON.menu + '</button><b>' + esc(TA.appName) + '</b></div>' +
       '<div class="shell"><aside class="side" id="side"><div class="brand">' + ICON.leaf + esc(TA.appName) + '</div><nav class="nav">' +
       SECTIONS.map(s => '<button class="' + (A.section === s ? 'on' : '') + '" data-a="section" data-s="' + s + '">' + ICON[s] +
@@ -348,6 +355,10 @@
       '</nav>' + (window.INSTALL_PROMPT ? '<button class="fieldlink" data-a="install">' + ICON.plus + esc(TA.installApp) + '</button>' : '') +
       fieldShortcut() + '<div class="who"><span>' + esc(A.d.me.name) + '</span><button data-a="logout">' + esc(TA.logout) + '</button></div></aside>' +
       '<main class="main" id="main">' + (VIEW[A.section] || VIEW.soon)(dg) + '</main></div>';
+    if (keep && keep.type !== 'checkbox') {
+      const el = document.querySelector(keep.sel);
+      if (el) { el.value = keep.value; el.focus(); }
+    }
     afterRender();
   }
 
@@ -848,8 +859,11 @@
         esc((A.ix.people[d.byPersonId] || {}).name || '') + ' · ' + esc(when(d.at)) + '</span></div>').join('') : '<div class="muted small" style="margin-top:6px">' + esc(TA.noDocs) + '</div>') + '</div>';
   }
 
+
   function orderView(o) {
-    const draft = o.status === 'draft';
+    if (o.status === 'draft') return draftView(o);
+    delete A.drafts[o.id];
+    const draft = false;
     const lines = linesOf(o.id);
     const t = orderTotals(o, lines);
     const steps = ['draft', 'sent', 'partial', 'received'];
@@ -866,8 +880,9 @@
       '<label>' + esc(TA.fDest) + '</label>' + (draft ? '<select class="in" id="o_dest">' + dests.map(l => '<option value="' + l.id + '"' + (l.id === o.destId ? ' selected' : '') + '>' + esc(l.name) + '</option>').join('') + '</select>' : '<span>' + esc((A.ix.locs[o.destId] || {}).name) + '</span>') +
       '<label>' + esc(TA.fIncVat) + '</label>' + (draft ? '<input type="checkbox" id="o_vat"' + (o.pricesIncludeVat ? ' checked' : '') + '>' : '<span>' + (o.pricesIncludeVat ? '✓' : '—') + '</span>') +
       '<label>' + esc(TA.fNote) + '</label>' + (draft ? '<input class="in" id="o_note" value="' + esc(o.note) + '">' : '<span>' + esc(o.note) + '</span>') + '</div></div>';
-    h += '<div class="box" style="margin-top:12px;padding:0"><table id="olines"><tr><th>' + esc(TA.cItem) + '</th><th>' + esc(TA.cOrdered) + '</th><th>' + esc(TA.cUnit) + '</th>' +
-      (draft ? '' : '<th>' + esc(TA.cReceived) + '</th>') + '<th>' + esc(TA.cUnitPrice) + '</th><th>' + esc(TA.cSum) + '</th>' + (draft ? '<th></th>' : '') + '</tr>' +
+    const anyDisc = lines.some(l => l.discount);
+    h += '<div class="box" style="margin-top:12px;padding:0;overflow:auto"><table id="olines"><tr><th>' + esc(TA.cItem) + '</th><th>' + esc(TA.cOrdered) + '</th><th>' + esc(TA.cUnit) + '</th>' +
+      (draft ? '' : '<th>' + esc(TA.cReceived) + '</th>') + (anyDisc ? '<th>' + esc(TA.cList) + '</th><th>' + esc(TA.cDiscount) + '</th>' : '') + '<th>' + esc(anyDisc ? TA.cNet : TA.cUnitPrice) + '</th><th>' + esc(TA.cSum) + '</th>' + (draft ? '<th></th>' : '') + '</tr>' +
       lines.map(l => {
         const it = item(l.itemId) || {};
         const per = l.buyUnitQty || 1;
@@ -876,6 +891,7 @@
         const full = got >= l.qtyBuy;
         return '<tr data-line="' + l.id + '"><td>' + esc(displayName(l.itemId)) + '</td><td>' + (draft ? '<input class="in" type="number" min="0" style="max-width:90px" data-lq value="' + l.qtyBuy + '">' : num(l.qtyBuy)) + '</td><td>' + esc(unit) + '</td>' +
           (draft ? '' : '<td' + (full ? '' : ' style="color:var(--warn)"') + '>' + num(got) + '</td>') +
+          (anyDisc ? '<td>' + money(l.listPrice !== null && l.listPrice !== '' ? l.listPrice : l.unitPriceBuy) + '</td><td>' + (l.discount ? l.discount + '%' : '') + '</td>' : '') +
           '<td>' + (draft ? '<input class="in" type="number" min="0" step="0.01" style="max-width:110px" data-lp value="' + esc(l.unitPriceBuy) + '">' : money(l.unitPriceBuy)) + '</td>' +
           '<td>' + money(l.unitPriceBuy === null ? null : l.unitPriceBuy * l.qtyBuy) + '</td>' + (draft ? '<td><button class="btn sm danger" data-a="lineRemove">✕</button></td>' : '') + '</tr>';
       }).join('') + '</table></div>' +
@@ -883,7 +899,7 @@
       '<b>' + esc(fmt(TA.totals, { before: money(t.before), after: money(t.after) })) + '</b></div>';
     h += '<div class="btns">' +
       (draft ? '<button class="btn p" data-a="orderSave">' + esc(TA.saveDraft) + '</button><button class="btn p" data-a="orderSend">' + esc(TA.markSent) + '</button>' : '') +
-      '<button class="btn" data-a="orderPdf">' + esc(TA.downloadPdf) + '</button>' +
+      '<button class="btn" data-a="orderPdf">' + esc(TA.supplierDoc) + '</button>' +
       (o.status === 'sent' || o.status === 'partial' ? '<button class="btn" data-a="orderClose">' + esc(TA.closePartial) + '</button>' : '') +
       ((draft || o.status === 'sent') && !lines.some(l => A.d.receivedByLine[l.id]) ? '<button class="btn danger" data-a="orderCancel">' + esc(TA.cancelOrder) + '</button>' : '') + '</div>';
     h += orderDocs(o);
@@ -1247,6 +1263,7 @@
       '<label>' + esc(TA.sStale) + '</label><input class="in" id="s_stalePriceMonths" type="number" min="1" value="' + esc(s.stalePriceMonths) + '">' +
       '<label>' + esc(TA.sDigest) + '</label><select class="in" id="s_digestHour">' + Array.from({ length: 24 }, (_, hh) => '<option value="' + hh + '"' + (String(hh) === String(s.digestHour) ? ' selected' : '') + '>' + String(hh).padStart(2, '0') + ':00</option>').join('') + '</select>' +
       '<label>' + esc(TA.sCompany) + '</label><input class="in" id="s_companyName" value="' + esc(s.companyName) + '">' +
+      '<label>' + esc(TA.sCompanyDetails) + '</label><textarea class="in" id="s_companyDetails" rows="3" placeholder="' + esc(TA.sCompanyDetailsHint) + '">' + esc(s.companyDetails || '') + '</textarea>' +
       '</div><div class="btns" style="margin-top:12px"><button class="btn p" data-a="saveSettings">' + esc(TA.save) + '</button></div></div>' +
       '<div class="box" style="margin-top:12px"><h2 style="margin-top:0">' + esc(TA.sAdmins) + ' · ' + esc(TA.sRecipients) + '</h2><div class="hint" style="margin-bottom:8px">' + esc(TA.sRecipientsHint) + '</div>' +
       '<table><tr><th>' + esc(TA.fName) + '</th><th>' + esc(TA.fEmail) + '</th><th>' + esc(TA.fAlerts) + '</th></tr>' +
@@ -1340,6 +1357,7 @@
           : (ent === 'People' && r.token ? '<button class="btn sm" data-a="copyLink" data-id="' + r.id + '">' + esc(TA.copyLink) + '</button>' +
             (r.role === 'admin' && window.ENGINE ? '<button class="btn sm" data-a="copyFieldLink" data-id="' + r.id + '">' + esc(TA.copyFieldLink) + '</button>' : '') +
             '<button class="btn sm" data-a="newLink" data-id="' + r.id + '">' + esc(TA.newLink) + '</button>' : '') +
+            (ent === 'Suppliers' ? '<button class="btn sm p" data-a="openSupplier" data-id="' + r.id + '">' + esc(TA.supplierCard) + '</button>' : '') +
             '<button class="btn sm" data-a="listEdit"' + e + ' data-id="' + r.id + '">' + esc(TA.edit) + '</button>' +
             '<button class="btn sm danger" data-a="listArchive"' + e + ' data-id="' + r.id + '">' + esc(TA.remove) + '</button>') +
         '</div></td></tr>').join('') : '<tr><td colspan="9" class="muted">' + esc(TA.emptyList) + '</td></tr>') +
@@ -1358,7 +1376,12 @@
   };
 
   // ספקים (בהמשך: כרטיס ספק עם מחירונים)
-  VIEW.suppliers = () => '<h1>' + esc(TA.menu.suppliers) + '</h1><div class="btns" style="margin-bottom:12px">' + listButtons('Suppliers') + '</div>' + listTable('Suppliers');
+  VIEW.suppliers = () => {
+    const s = A.supId && A.ix.sups[A.supId];
+    if (s) return supplierCard(s);
+    A.supId = '';
+    return '<h1>' + esc(TA.menu.suppliers) + '</h1><div class="btns" style="margin-bottom:12px">' + listButtons('Suppliers') + '</div>' + listTable('Suppliers');
+  };
 
   // קישור אישי: עובד – למסך השטח; מנהל (בגרסת Firebase) – למסך הניהול
   // מנהל בשטח: מסך השטח עם הקישור האישי שלו (הדיווחים נרשמים על שמו)
@@ -1629,6 +1652,380 @@
   }
 
   const H = {};
+
+  // ==================== מחירון ספק, הזמנה בטיוטה, בחירה ====================
+  const netOf = (list, d) => Math.round(Number(list) * (1 - (Number(d) || 0) / 100) * 100) / 100;
+  const supItem = (supId, itemId) => (A.ix.supItems || {})[supId + '|' + itemId] || null;
+  // מה שילמנו בפעם האחרונה אצל ספק (ליחידת קנייה, לפני מע"מ)
+  function lastPaid(supId, itemId) {
+    let p = null;
+    A.d.tables.Prices.forEach(x => { if (x.supplierId === supId && x.itemId === itemId && x.unitPrice !== null && (!p || x.at > p.at)) p = x; });
+    if (!p) return null;
+    const per = (item(itemId) || {}).buyUnitQty || 1;
+    const line = A.d.tables.OrderLines.find(l => l.id === p.refId);
+    const order = line && A.ix.orders[line.orderId];
+    return {
+      at: p.at, qty: p.qty !== null && p.qty !== '' ? p.qty : line ? line.qtyBuy : null, disc: p.discount || 0,
+      list: p.listPrice !== null && p.listPrice !== '' ? p.listPrice : null, net: Math.round(p.unitPrice * per * 100) / 100, number: order ? order.number : '',
+    };
+  }
+  // הכי זול אצל ספק אחר: לפי המחירון שלו, ואם אין – לפי מה ששילמנו לו בפעם האחרונה
+  function bestOther(supId, itemId) {
+    let best = null;
+    A.d.tables.Suppliers.forEach(s => {
+      if (s.archived || s.id === supId) return;
+      const si = supItem(s.id, itemId);
+      const lp = lastPaid(s.id, itemId);
+      const cand = si && si.listPrice !== null && si.listPrice !== '' ? { net: netOf(si.listPrice, si.discount), at: si.updatedAt } : lp ? { net: lp.net, at: lp.at } : null;
+      if (cand && (!best || cand.net < best.net)) best = Object.assign(cand, { sup: s });
+    });
+    return best;
+  }
+  // מחיר התחלתי לשורה חדשה: מחירון הספק, אחרת מה ששילמנו לו בפעם הקודמת
+  function prefill(supId, itemId) {
+    const si = supItem(supId, itemId);
+    if (si && si.listPrice !== null && si.listPrice !== '') return { listPrice: si.listPrice, discount: si.discount || 0 };
+    const lp = lastPaid(supId, itemId);
+    if (lp) return lp.list !== null ? { listPrice: lp.list, discount: lp.disc } : { listPrice: lp.net, discount: 0 };
+    return { listPrice: '', discount: 0 };
+  }
+  const agoText = iso => {
+    const days = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / DAY));
+    return days < 1 ? TA.today : days < 31 ? fmt(TA.daysAgo, { n: days }) : fmt(TA.monthsAgo, { n: Math.round(days / 30) });
+  };
+
+  // ---- בחירה: כל שינוי בשורה מסומנת חל על כל המסומנות ----
+  // 'ol' = שורות ההזמנה בטיוטה, 'pl' = מחירון הספק שבכרטיס
+  A.plSel = {};
+  function selRows(k) {
+    if (k === 'ol') { const d = A.drafts[A.orderId]; return d ? d.lines : []; }
+    return priceListRows(A.supId);
+  }
+  const isSel = (k, r) => (k === 'ol' ? !!r.sel : !!A.plSel[r.itemId]);
+  const setSel = (k, r, v) => { if (k === 'ol') r.sel = v; else if (v) A.plSel[r.itemId] = true; else delete A.plSel[r.itemId]; };
+  const rowKey = (k, r, i) => (k === 'ol' ? String(i) : r.itemId);
+  const nSel = k => selRows(k).filter(r => isSel(k, r)).length;
+  function selBar(k) {
+    const n = nSel(k);
+    if (!n) return '';
+    return '<div class="selbar"><b>' + esc(fmt(TA.selCount, { n })) + '</b><span class="grow">' + esc(n === 1 ? TA.selHint1 : fmt(k === 'pl' ? TA.selHintPl : TA.selHint, { n })) + '</span>' +
+      '<button class="btn sm" data-a="selClear" data-k="' + k + '">' + esc(TA.selClear) + '</button></div>';
+  }
+  function allBox(k) {
+    const rows = selRows(k);
+    return '<input type="checkbox" class="rowcheck" data-all="' + k + '" title="' + esc(TA.selAll) + '"' + (rows.length && rows.every(r => isSel(k, r)) ? ' checked' : '') + '>';
+  }
+  const rowBox = (k, r, i) => '<input type="checkbox" class="rowcheck" data-row="' + k + '" data-key="' + esc(rowKey(k, r, i)) + '"' + (isSel(k, r) ? ' checked' : '') + '>';
+  // השורות שהשינוי חל עליהן: כל המסומנות (אם השורה מסומנת), אחרת רק היא
+  const targetsOf = (k, row) => (isSel(k, row) ? selRows(k).filter(r => isSel(k, r)) : [row]);
+  H.selClear = el => { selRows(el.dataset.k).forEach(r => setSel(el.dataset.k, r, false)); render(); };
+  document.addEventListener('click', e => {
+    const t = e.target;
+    if (!t.matches) return;
+    if (t.matches('input[data-row]')) {
+      const k = t.dataset.row;
+      const rows = selRows(k);
+      const keys = rows.map((r, i) => rowKey(k, r, i));
+      const at = keys.indexOf(t.dataset.key);
+      const from = A.lastSel && A.lastSel.k === k && e.shiftKey ? keys.indexOf(A.lastSel.key) : at;
+      for (let i = Math.min(from, at); i <= Math.max(from, at); i++) if (i >= 0) setSel(k, rows[i], t.checked);
+      A.lastSel = { k, key: t.dataset.key };
+      render();
+    } else if (t.matches('input[data-all]')) {
+      selRows(t.dataset.all).forEach(r => setSel(t.dataset.all, r, t.checked));
+      render();
+    }
+  });
+
+  // הודעה עם "בטל" אחרי שינוי קבוצתי
+  function undoToast(text, undoFn) {
+    let el = document.getElementById('undoToast');
+    if (!el) { el = document.createElement('div'); el.id = 'undoToast'; el.className = 'toast undo'; document.body.appendChild(el); }
+    el.innerHTML = '<span>' + esc(text) + '</span>' + (undoFn ? '<button>' + esc(TA.undo) + '</button>' : '');
+    el.style.display = 'flex';
+    clearTimeout(undoToast.t);
+    undoToast.t = setTimeout(() => { el.style.display = 'none'; }, 9000);
+    if (undoFn) el.querySelector('button').onclick = () => { el.style.display = 'none'; undoFn(); };
+  }
+
+  // ---- הזמנה בטיוטה: נערכת במסך ונשמרת לבד ----
+  A.drafts = {};
+  function draftOf(o) {
+    let d = A.drafts[o.id];
+    if (!d) {
+      d = A.drafts[o.id] = {
+        supplierId: o.supplierId, destId: o.destId, vat: !!o.pricesIncludeVat, note: o.note || '',
+        lines: A.d.tables.OrderLines.filter(l => l.orderId === o.id && l.qtyBuy > 0).map(l => ({
+          id: l.id, itemId: l.itemId, qtyBuy: l.qtyBuy,
+          listPrice: l.listPrice !== null && l.listPrice !== '' && l.listPrice !== undefined ? l.listPrice : (l.unitPriceBuy === null ? '' : l.unitPriceBuy),
+          discount: l.discount || 0, saveToList: !!l.saveToList, sel: false,
+        })),
+      };
+    }
+    return d;
+  }
+  const draftPayload = (o, d) => ({
+    id: o.id, supplierId: d.supplierId, destId: d.destId, pricesIncludeVat: d.vat, note: d.note,
+    lines: d.lines.map(l => ({ id: l.id, itemId: l.itemId, qtyBuy: Number(l.qtyBuy) || 0, listPrice: l.listPrice === '' ? null : Number(l.listPrice), discount: Number(l.discount) || 0, saveToList: !!l.saveToList })),
+  });
+  let draftTimer = null;
+  let draftSaving = null;
+  function scheduleDraftSave(orderId) {
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(() => saveDraft(orderId), 700);
+  }
+  async function saveDraft(orderId) {
+    clearTimeout(draftTimer);
+    if (draftSaving) { await draftSaving; }
+    const o = A.ix.orders[orderId];
+    const d = A.drafts[orderId];
+    if (!o || !d || o.status !== 'draft') return { ok: true };
+    draftSaving = (async () => {
+      const r = await mutate('admin.order.save', { order: draftPayload(o, d) }, null);
+      // שורות חדשות קיבלו מזהה בשרת – מעדכנים אותן בטיוטה (כדי שלא ייווצרו שוב)
+      if (r.ok) {
+        const lines = A.d.tables.OrderLines.filter(l => l.orderId === orderId && l.qtyBuy > 0);
+        d.lines.forEach(l => { if (!l.id) { const s = lines.find(x => x.itemId === l.itemId); if (s) l.id = s.id; } });
+      }
+      return r;
+    })();
+    const r = await draftSaving;
+    draftSaving = null;
+    return r;
+  }
+  function draftEdit(k, key, fn, label) {
+    const d = A.drafts[A.orderId];
+    const rows = selRows(k);
+    const row = rows[Number(key)];
+    if (!row) return;
+    const list = targetsOf(k, row);
+    const snap = list.length > 1 ? JSON.stringify(d.lines) : null;
+    list.forEach(fn);
+    if (snap) {
+      const orderId = A.orderId;
+      undoToast(fmt(TA.appliedTo, { what: label, n: list.length }), () => { A.drafts[orderId].lines = JSON.parse(snap); scheduleDraftSave(orderId); render(); });
+    }
+    scheduleDraftSave(A.orderId);
+    render();
+  }
+
+  function draftView(o) {
+    const d = draftOf(o);
+    const sup = A.ix.sups[d.supplierId] || {};
+    const sups = A.d.tables.Suppliers.filter(s => !s.archived || s.id === d.supplierId);
+    const dests = A.d.tables.Locations.filter(l => (!l.archived || l.id === d.destId) && l.type !== 'repair');
+    const vat = (o.vatRate || Number(A.d.settings.vatRate) || 0) / 100;
+    let total = 0;
+    const rows = d.lines.map((l, i) => {
+      const it = item(l.itemId) || {};
+      const per = it.buyUnitQty || 1;
+      const unit = per > 1 ? it.buyUnitName : unitLabel(l.itemId);
+      const n = l.listPrice === '' ? null : netOf(l.listPrice, l.discount);
+      const sum = n === null ? 0 : n * (Number(l.qtyBuy) || 0);
+      total += sum;
+      const si = supItem(d.supplierId, l.itemId);
+      const hasList = si && si.listPrice !== null && si.listPrice !== '';
+      const diffList = hasList && Number(l.listPrice) !== Number(si.listPrice);
+      const diffDisc = hasList && Number(l.discount) !== Number(si.discount || 0);
+      const lp = lastPaid(d.supplierId, l.itemId);
+      const other = bestOther(d.supplierId, l.itemId);
+      const hint = (lp ? fmt(TA.lastHere, { date: shortDate(lp.at), qty: lp.qty === null ? '' : num(lp.qty) + ' ' + (unit || ''), net: money(lp.net), disc: lp.disc ? ' (' + lp.disc + '%)' : '' }) : TA.firstHere) +
+        (other ? ' · ' + fmt(TA.atOther, { name: other.sup.name }) + ' <span class="' + (n !== null && other.net < n ? 'cheaper' : 'pricier') + '">' + money(other.net) + '</span> (' + esc(agoText(other.at)) + ')' : '');
+      const listCell = !hasList ? '<span class="muted small">' + esc(TA.willAddToList) + '</span>'
+        : (diffList || diffDisc) ? '<label class="small"><input type="checkbox" data-olsave="' + i + '"' + (l.saveToList ? ' checked' : '') + '> ' + esc(TA.saveToList) + '</label>'
+          : '<span class="muted small">' + esc(TA.asInList) + '</span>';
+      return '<tr class="' + (l.sel ? 'sel' : '') + '"><td>' + rowBox('ol', l, i) + '</td>' +
+        '<td><b>' + esc(displayName(l.itemId)) + '</b><div class="hintline">' + hint + '</div></td>' +
+        '<td style="white-space:nowrap"><input class="in num" type="number" min="0" data-olf="qtyBuy" data-key="' + i + '" value="' + esc(l.qtyBuy) + '"> <span class="muted small">' + esc(unit || '') + '</span></td>' +
+        '<td><input class="in num' + (diffList ? ' changed' : '') + '" type="number" min="0" step="0.01" data-olf="listPrice" data-key="' + i + '" value="' + esc(l.listPrice) + '"></td>' +
+        '<td style="white-space:nowrap"><input class="in pct' + (diffDisc ? ' changed' : '') + '" type="number" min="0" max="100" step="0.5" data-olf="discount" data-key="' + i + '" value="' + esc(l.discount) + '">%</td>' +
+        '<td><b>' + (n === null ? '' : money(n)) + '</b></td><td>' + (sum ? money(sum) : '') + '</td><td>' + listCell + '</td>' +
+        '<td><button class="btn sm danger" data-a="olRemove" data-key="' + i + '" title="' + esc(l.sel && nSel('ol') > 1 ? TA.removeSelected : TA.remove) + '">✕</button></td></tr>';
+    }).join('');
+    const before = d.vat ? total / (1 + vat) : total;
+    const after = d.vat ? total : total * (1 + vat);
+    return '<button class="link" data-a="orderBack" style="margin-bottom:8px">' + esc(TA.backToList) + '</button>' +
+      '<h1>' + esc(fmt(TA.orderTitle, { number: o.number, supplier: sup.name || '' })) + ' <span class="tag">' + esc(TA.statuses.draft) + '</span></h1>' +
+      '<div class="box" style="margin-bottom:12px"><div class="btns">' +
+      '<label class="muted">' + esc(TA.fSupplier) + '</label><select class="in" data-od="supplierId" style="max-width:220px">' + sups.map(s => '<option value="' + s.id + '"' + (s.id === d.supplierId ? ' selected' : '') + '>' + esc(s.name) + '</option>').join('') + '</select>' +
+      '<button class="link" data-a="openSupplier" data-id="' + d.supplierId + '">' + esc(TA.supplierCard) + '</button>' +
+      '<label class="muted">' + esc(TA.fDest) + '</label><select class="in" data-od="destId" style="max-width:180px">' + dests.map(l => '<option value="' + l.id + '"' + (l.id === d.destId ? ' selected' : '') + '>' + esc(l.name) + '</option>').join('') + '</select>' +
+      '<label class="small"><input type="checkbox" data-od="vat"' + (d.vat ? ' checked' : '') + '> ' + esc(TA.fIncVat) + '</label></div>' +
+      '<div class="inline" style="margin-top:8px"><input class="in" data-od="note" placeholder="' + esc(TA.fNote) + '" value="' + esc(d.note) + '"></div></div>' +
+      selBar('ol') + '<div class="hint" style="margin-bottom:6px">' + esc(TA.draftHint) + '</div>' +
+      '<div class="box" style="padding:0;overflow:auto"><table><tr><th>' + allBox('ol') + '</th><th>' + esc(TA.cItem) + '</th><th>' + esc(TA.cQty) + '</th><th>' + esc(TA.cList) + '</th><th>' + esc(TA.cDiscount) + '</th><th>' + esc(TA.cNet) + '</th><th>' + esc(TA.cSum) + '</th><th></th><th></th></tr>' +
+      (rows || '<tr><td colspan="9" class="muted">' + esc(TA.noLines) + '</td></tr>') + '</table></div>' +
+      '<div class="btns" style="justify-content:space-between;margin:10px 0"><button class="btn" data-a="olAdd">' + ICON.plus + esc(TA.addLine) + '</button>' +
+      '<div style="text-align:left;line-height:1.8">' + esc(TA.beforeVat) + ': <b>' + money(before) + '</b><br>' + esc(fmt(TA.vatLine, { n: o.vatRate || A.d.settings.vatRate })) + ': ' + money(after - before) + '<br>' + esc(TA.afterVat) + ': <b>' + money(after) + '</b></div></div>' +
+      '<div class="btns"><button class="btn p" data-a="orderSend">' + esc(TA.markSent) + '</button><button class="btn" data-a="orderPdf">' + esc(TA.supplierDoc) + '</button>' +
+      '<button class="btn danger" data-a="orderCancel">' + esc(TA.cancelOrder) + '</button></div>' + orderDocs(o);
+  }
+
+  // שינויים בטיוטה
+  document.addEventListener('change', e => {
+    const t = e.target;
+    if (!t.matches || A.section !== 'orders' || !A.orderId || !A.drafts[A.orderId]) return;
+    const d = A.drafts[A.orderId];
+    if (t.dataset.od) {
+      const k = t.dataset.od;
+      if (k === 'vat') d.vat = t.checked;
+      else if (k === 'supplierId') {
+        // ספק אחר: המחירים מתמלאים מהמחירון שלו (הכמויות נשארות)
+        d.supplierId = t.value;
+        d.lines.forEach(l => { const p = prefill(d.supplierId, l.itemId); if (p.listPrice !== '') { l.listPrice = p.listPrice; l.discount = p.discount; } l.saveToList = false; });
+      } else d[k] = t.value;
+      scheduleDraftSave(A.orderId);
+      render();
+    } else if (t.dataset.olf) {
+      const f = t.dataset.olf;
+      const v = t.value;
+      draftEdit('ol', t.dataset.key, r => { r[f] = v; }, { qtyBuy: TA.cQty, listPrice: TA.cList, discount: TA.cDiscount }[f] + ' ' + v + (f === 'discount' ? '%' : ''));
+    } else if (t.dataset.olsave !== undefined) {
+      const v = t.checked;
+      draftEdit('ol', t.dataset.olsave, r => { r.saveToList = v; }, v ? TA.saveToList : TA.notSaveToList);
+    }
+  });
+  H.olRemove = async el => {
+    const d = A.drafts[A.orderId];
+    const row = d.lines[Number(el.dataset.key)];
+    const list = targetsOf('ol', row);
+    if (list.length > 1 && !(await confirmBox(fmt(TA.removeLinesConfirm, { n: list.length }), TA.remove, true))) return;
+    const snap = JSON.stringify(d.lines);
+    const orderId = A.orderId;
+    d.lines = d.lines.filter(l => list.indexOf(l) < 0);
+    undoToast(fmt(TA.linesRemoved, { n: list.length }), () => { A.drafts[orderId].lines = JSON.parse(snap); scheduleDraftSave(orderId); render(); });
+    scheduleDraftSave(orderId);
+    render();
+  };
+  H.olAdd = async () => {
+    const d = A.drafts[A.orderId];
+    const id = await pickBox(TA.addLine, true, d.lines.map(l => l.itemId));
+    if (!id) return;
+    const ex = d.lines.find(l => l.itemId === id);
+    if (!ex) d.lines.push(Object.assign({ itemId: id, qtyBuy: 1, saveToList: false, sel: false }, prefill(d.supplierId, id)));
+    scheduleDraftSave(A.orderId);
+    render();
+  };
+
+  // ---- כרטיס ספק ----
+  A.supId = '';
+  A.supTab = 'list';
+  function priceListRows(supId) {
+    return A.d.tables.SupplierItems.filter(x => x.supplierId === supId && !x.archived && item(x.itemId))
+      .sort((a, b) => displayName(a.itemId).localeCompare(displayName(b.itemId), 'he', { numeric: true }));
+  }
+  H.openSupplier = el => { A.section = 'suppliers'; A.supId = el.dataset.id; A.supTab = 'list'; A.plSel = {}; render(); window.scrollTo(0, 0); };
+  H.supBack = () => { A.supId = ''; render(); };
+  H.supTab = el => { A.supTab = el.dataset.v; render(); };
+  const SUP_FIELDS = () => [
+    { k: 'name', label: TA.fName }, { k: 'phone', label: TA.fPhone }, { k: 'contact', label: TA.fContact }, { k: 'email', label: TA.fEmail2 },
+    { k: 'vatId', label: TA.fVatId }, { k: 'address', label: TA.fAddress }, { k: 'note', label: TA.fNote },
+  ];
+  H.supEdit = () => {
+    const s = A.ix.sups[A.supId];
+    formBox(TA.edit + ' · ' + s.name, SUP_FIELDS(), s, withNameCheck('Suppliers', s.id, v => saveQuiet('Suppliers', Object.assign({ id: s.id }, v))));
+  };
+
+  function supplierCard(s) {
+    const tabs = [['list', TA.supTabs.list], ['history', TA.supTabs.history], ['orders', TA.supTabs.orders], ['details', TA.supTabs.details]];
+    let h = '<button class="link" data-a="supBack" style="margin-bottom:8px">' + esc(TA.allSuppliers) + '</button><h1>' + esc(s.name) + '</h1>' +
+      '<div class="btns" style="margin-bottom:12px">' + seg('supTab', A.supTab, tabs) + '<button class="btn" data-a="supNewOrder">' + ICON.plus + esc(TA.newOrderFrom) + '</button></div>';
+    if (A.supTab === 'details') {
+      h += '<div class="box"><div class="form" style="max-width:560px">' + SUP_FIELDS().map(f => '<label>' + esc(f.label) + '</label><span>' + esc(s[f.k] || '') + '</span>').join('') + '</div>' +
+        '<div class="btns" style="margin-top:12px"><button class="btn" data-a="supEdit">' + esc(TA.edit) + '</button></div></div>';
+    } else if (A.supTab === 'orders') {
+      h += ordersTable(A.d.tables.Orders.filter(o => o.supplierId === s.id && o.status !== 'canceled'), TA.noOrders);
+    } else if (A.supTab === 'history') {
+      const ids = [];
+      A.d.tables.Prices.forEach(p => { if (p.supplierId === s.id && ids.indexOf(p.itemId) < 0 && item(p.itemId)) ids.push(p.itemId); });
+      ids.sort((a, b) => displayName(a).localeCompare(displayName(b), 'he', { numeric: true }));
+      if (!ids.length) return h + '<div class="box muted">' + esc(TA.noHistory) + '</div>';
+      if (ids.indexOf(A.supHist) < 0) A.supHist = ids[0];
+      const per = (item(A.supHist) || {}).buyUnitQty || 1;
+      const rows = A.d.tables.Prices.filter(p => p.supplierId === s.id && p.itemId === A.supHist && p.unitPrice !== null).sort((a, b) => (a.at < b.at ? 1 : -1));
+      h += '<div class="btns" style="margin-bottom:10px"><select class="in" id="supHist" style="max-width:360px">' + ids.map(id => '<option value="' + id + '"' + (id === A.supHist ? ' selected' : '') + '>' + esc(displayName(id)) + '</option>').join('') + '</select></div>' +
+        '<div class="box" style="padding:0;overflow:auto"><table><tr><th>' + esc(TA.cDate) + '</th><th>' + esc(TA.cNumber) + '</th><th>' + esc(TA.cQty) + '</th><th>' + esc(TA.cList) + '</th><th>' + esc(TA.cDiscount) + '</th><th>' + esc(TA.cPaidNet) + '</th></tr>' +
+        rows.map(p => {
+          const line = A.d.tables.OrderLines.find(l => l.id === p.refId);
+          const o = line && A.ix.orders[line.orderId];
+          const qty = p.qty !== null && p.qty !== '' ? p.qty : line ? line.qtyBuy : '';
+          return '<tr><td>' + shortDate(p.at) + '</td><td>' + (o ? '<button class="link" data-a="openOrder" data-id="' + o.id + '">' + o.number + '</button>' : '') + '</td><td>' + (qty === '' ? '' : num(qty)) + '</td>' +
+            '<td>' + (p.listPrice !== null && p.listPrice !== '' ? money(p.listPrice) : '') + '</td><td>' + (p.discount ? p.discount + '%' : '') + '</td><td><b>' + money(Math.round(p.unitPrice * per * 100) / 100) + '</b></td></tr>';
+        }).join('') + '</table></div>';
+    } else {
+      const rows = priceListRows(s.id);
+      h += selBar('pl') + '<div class="hint" style="margin-bottom:6px">' + esc(TA.priceListHint) + '</div>' +
+        '<div class="box" style="padding:0;overflow:auto"><table><tr><th>' + allBox('pl') + '</th><th>' + esc(TA.cItem) + '</th><th>' + esc(TA.cSupCode) + '</th><th>' + esc(TA.cList) + '</th><th>' + esc(TA.cUsualDiscount) + '</th><th>' + esc(TA.cNet) + '</th><th>' + esc(TA.cUpdated) + '</th><th></th></tr>' +
+        (rows.length ? rows.map((r, i) => '<tr class="' + (A.plSel[r.itemId] ? 'sel' : '') + '"><td>' + rowBox('pl', r, i) + '</td><td>' + esc(displayName(r.itemId)) + '</td>' +
+          '<td><input class="in" style="width:110px" data-plf="code" data-key="' + r.itemId + '" value="' + esc(r.code) + '"></td>' +
+          '<td><input class="in num" type="number" min="0" step="0.01" data-plf="listPrice" data-key="' + r.itemId + '" value="' + esc(r.listPrice) + '"></td>' +
+          '<td style="white-space:nowrap"><input class="in pct" type="number" min="0" max="100" step="0.5" data-plf="discount" data-key="' + r.itemId + '" value="' + esc(r.discount) + '">%</td>' +
+          '<td><b>' + (r.listPrice !== null && r.listPrice !== '' ? money(netOf(r.listPrice, r.discount)) : '') + '</b></td><td class="muted small">' + shortDate(r.updatedAt) + '</td>' +
+          '<td><button class="btn sm danger" data-a="plRemove" data-key="' + r.itemId + '" title="' + esc(TA.removeFromList) + '">✕</button></td></tr>').join('')
+          : '<tr><td colspan="8" class="muted">' + esc(TA.priceListEmpty) + '</td></tr>') + '</table></div>' +
+        '<div class="btns" style="margin-top:10px"><button class="btn" data-a="plAdd">' + ICON.plus + esc(TA.addToList) + '</button></div>';
+    }
+    return h;
+  }
+
+  // מחירון: שמירה של כמה פריטים בפעולה אחת (מיד במסך, השרת מאשר ברקע)
+  function savePriceRows(supId, rows) {
+    return optimistic('admin.supplierItems.save', { supplierId: supId, rows }, d => {
+      rows.forEach(r => {
+        let cur = d.tables.SupplierItems.find(x => x.supplierId === supId && x.itemId === r.itemId);
+        if (r.remove) { if (cur) cur.archived = true; return; }
+        if (!cur) { cur = { id: tmpId(), supplierId: supId, itemId: r.itemId, code: '', listPrice: null, discount: 0 }; d.tables.SupplierItems.push(cur); }
+        Object.keys(r).forEach(k => { if (k !== 'itemId') cur[k] = k === 'code' ? r[k] : r[k] === '' || r[k] === null ? null : Number(r[k]); });
+        cur.archived = false;
+        cur.updatedAt = new Date().toISOString();
+      });
+    });
+  }
+  document.addEventListener('change', e => {
+    const t = e.target;
+    if (!t.matches || !t.matches('[data-plf]') || !A.supId) return;
+    const f = t.dataset.plf;
+    const v = t.value;
+    const rows = priceListRows(A.supId);
+    const row = rows.find(r => r.itemId === t.dataset.key);
+    if (!row) return;
+    // קוד אצל הספק – ייחודי לכל פריט, לכן רק בשורה עצמה
+    const list = f === 'code' ? [row] : targetsOf('pl', row);
+    const old = list.map(r => ({ itemId: r.itemId, code: r.code, listPrice: r.listPrice, discount: r.discount }));
+    const supId = A.supId;
+    savePriceRows(supId, list.map(r => ({ itemId: r.itemId, [f]: v })));
+    if (list.length > 1) {
+      undoToast(fmt(TA.appliedTo, { what: { code: TA.cSupCode, listPrice: TA.cList, discount: TA.cUsualDiscount }[f] + ' ' + v + (f === 'discount' ? '%' : ''), n: list.length }),
+        () => savePriceRows(supId, old));
+    }
+  });
+  H.plRemove = async el => {
+    const rows = priceListRows(A.supId);
+    const row = rows.find(r => r.itemId === el.dataset.key);
+    const list = targetsOf('pl', row);
+    if (list.length > 1 && !(await confirmBox(fmt(TA.removeFromListConfirm, { n: list.length }), TA.remove, true))) return;
+    const old = list.map(r => ({ itemId: r.itemId, code: r.code, listPrice: r.listPrice, discount: r.discount }));
+    const supId = A.supId;
+    list.forEach(r => { delete A.plSel[r.itemId]; });
+    savePriceRows(supId, list.map(r => ({ itemId: r.itemId, remove: true })));
+    undoToast(fmt(TA.removedFromList, { n: list.length }), () => savePriceRows(supId, old));
+  };
+  H.plAdd = async () => {
+    const supId = A.supId;
+    const id = await pickBox(TA.addToList, true, priceListRows(supId).map(r => r.itemId));
+    if (!id) return;
+    const p = prefill(supId, id);
+    savePriceRows(supId, [{ itemId: id, listPrice: p.listPrice, discount: p.discount }]);
+  };
+  H.supNewOrder = async () => {
+    const hub = A.d.tables.Locations.find(l => l.type === 'hub' && !l.archived);
+    const r = await mutate('admin.order.save', { order: { supplierId: A.supId, destId: hub ? hub.id : '', pricesIncludeVat: false, lines: [] } }, null);
+    if (r.ok) { A.section = 'orders'; A.orderId = r.data.id; safeRender(); }
+  };
+  document.addEventListener('change', e => {
+    if (e.target.id === 'supHist') { A.supHist = e.target.value; render(); }
+  });
+
   H.menu =() => document.getElementById('side').classList.toggle('open');
   // מעבר בין חלקים גם מושך את הנתונים העדכניים מהשטח
   H.section = el => { A.section = el.dataset.s; render(); window.scrollTo(0, 0); poll(); };
@@ -1858,7 +2255,7 @@
 
   // ---- הזמנות ----
   H.orderTab = el => { A.orderTab = el.dataset.v; A.orderId = ''; render(); poll(); };
-  H.openOrder = el => { A.orderId = el.dataset.id; render(); window.scrollTo(0, 0); };
+  H.openOrder = el => { A.section = 'orders'; A.orderId = el.dataset.id; render(); window.scrollTo(0, 0); };
   H.orderBack = () => { A.orderId = ''; render(); };
   H.basketAdd = async () => {
     const id = await pickBox(TA.addNotMissing, true);
@@ -1870,11 +2267,8 @@
     const ids = basketItems().filter(id => basketSupplier(id) === sid && Number(A.basket.qty[id]) > 0);
     if (!ids.length) return;
     const hub = A.d.tables.Locations.find(l => l.type === 'hub' && !l.archived);
-    const lines = ids.map(id => {
-      const p = pricesOf(id).find(x => x.supplierId === sid);
-      const per = item(id).buyUnitQty || 1;
-      return { itemId: id, qtyBuy: Number(A.basket.qty[id]), unitPriceBuy: p ? Math.round(p.unitPrice * per * 100) / 100 : '' };
-    });
+    const lines = ids.map(id => Object.assign({ itemId: id, qtyBuy: Number(A.basket.qty[id]) }, prefill(sid, id)))
+      .map(l => Object.assign(l, { listPrice: l.listPrice === '' ? null : l.listPrice }));
     const r = await mutate('admin.order.save', { order: { supplierId: sid, destId: hub ? hub.id : '', pricesIncludeVat: false, lines } }, null);
     if (!r.ok) return;
     ids.forEach(id => { delete A.basket.qty[id]; A.basket.extra = A.basket.extra.filter(x => x !== id); });
@@ -1895,33 +2289,14 @@
     });
   };
 
-  function collectOrder(extraLine) {
-    const o = A.ix.orders[A.orderId];
-    const lines = [...document.querySelectorAll('#olines tr[data-line]')].map(tr => ({
-      id: tr.dataset.line,
-      qtyBuy: tr.style.display === 'none' ? 0 : tr.querySelector('[data-lq]').value,
-      unitPriceBuy: tr.querySelector('[data-lp]').value,
-    }));
-    if (extraLine) lines.push(extraLine);
-    return {
-      id: o.id, supplierId: document.getElementById('o_sup').value, destId: document.getElementById('o_dest').value,
-      pricesIncludeVat: document.getElementById('o_vat').checked, note: document.getElementById('o_note').value, lines,
-    };
-  }
-  H.orderSave = () => mutate('admin.order.save', { order: collectOrder() });
-  H.lineRemove = el => { el.closest('tr').style.display = 'none'; };
-  H.lineAdd = async () => {
-    const draft = collectOrder();
-    const id = await pickBox(TA.addLine, true);
-    if (!id) return;
-    const p = pricesOf(id).find(x => x.supplierId === draft.supplierId);
-    const per = item(id).buyUnitQty || 1;
-    draft.lines.push({ itemId: id, qtyBuy: 1, unitPriceBuy: p ? Math.round(p.unitPrice * per * 100) / 100 : '' });
-    mutate('admin.order.save', { order: draft }, null);
-  };
   H.orderSend = async () => {
     const o = A.ix.orders[A.orderId];
-    const r = await mutate('admin.order.save', { order: collectOrder() }, null);
+    const d = A.drafts[o.id];
+    if (d && !d.lines.some(l => Number(l.qtyBuy) > 0)) return toast(TA.noLines, true);
+    if (d && d.lines.some(l => Number(l.qtyBuy) > 0 && l.listPrice === '')) {
+      if (!(await confirmBox(TA.missingPriceConfirm, TA.markSent))) return;
+    }
+    const r = await saveDraft(o.id);
     if (!r.ok) return;
     if (!(await confirmBox(fmt(TA.sendConfirm, { number: o.number }), TA.markSent))) return;
     mutate('admin.order.status', { id: o.id, status: 'send' });
@@ -1937,6 +2312,7 @@
   };
   H.orderPdf = async () => {
     try {
+      if (A.drafts[A.orderId]) await saveDraft(A.orderId);
       const r = await api('admin.order.pdf', { id: A.orderId });
       if (!r.ok) return toast(r.error || TA.error, true);
       // גרסת Firebase: ההזמנה נפתחת בחלון הדפסה (שם בוחרים "שמור כ-PDF")
@@ -2058,7 +2434,7 @@
   // ---- הגדרות ----
   H.saveSettings = () => {
     const values = {};
-    ['vatRate', 'lateDays', 'stalePriceMonths', 'digestHour', 'companyName'].forEach(k => { values[k] = document.getElementById('s_' + k).value; });
+    ['vatRate', 'lateDays', 'stalePriceMonths', 'digestHour', 'companyName', 'companyDetails'].forEach(k => { values[k] = document.getElementById('s_' + k).value; });
     document.activeElement && document.activeElement.blur();
     optimistic('admin.settings.save', { values }, d => { Object.assign(d.settings, values); });
     toast(TA.saved);
