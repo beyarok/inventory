@@ -2,7 +2,7 @@
 
 (() => {
   const TX = T.field;
-  const STOCK_TYPES = ['hub', 'container', 'vehicle'];
+  const STOCK_TYPES = ['hub', 'container', 'cart', 'vehicle'];
 
   // ---------- עזרים ----------
   const esc = s => String(s === null || s === undefined ? '' : s)
@@ -14,6 +14,7 @@
 
   const svg = p => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + p + '</svg>';
   const ICON = {
+    used: svg('<path d="M5 12l4 4 10-10"/>'),
     take: svg('<path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M4 20h16"/>'),
     return: svg('<path d="M9 14l-5-5 5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>'),
     transfer: svg('<path d="M4 8h14"/><path d="M14 4l4 4-4 4"/><path d="M20 16H6"/><path d="M10 12l-4 4 4 4"/>'),
@@ -290,7 +291,7 @@
       '<div class="label">' + esc(TX.inStock) + '</div>' +
       (rows.length ? '<div class="stock">' + rows.join('') + '</div>' : '<div class="empty">' + esc(TX.noStock) + '</div>') +
       '<div class="label">' + esc(TX.whatHappened) + '</div>' +
-      '<div class="grid two">' + ['take', 'return', 'transfer', 'more'].map(act).join('') + '</div></main>';
+      '<div class="grid two">' + (kindOf(id) !== 'tool' && qtyAt(id, me()) > 0 ? ['used', 'return', 'transfer', 'take', 'more'] : ['take', 'return', 'transfer', 'more']).map(act).join('') + '</div></main>';
   };
 
   // "עוד": פעולות נדירות
@@ -341,6 +342,9 @@
       case 'take':
         if (tool) { s.type = 'transfer'; s.from = withStock(id, locChips(STOCK_TYPES, id).concat(placesChips(id, { noMe: true }).filter(c => c.h.indexOf('P:') === 0))); s.fixedTo = me(); }
         else { s.type = 'pull'; s.from = id ? withStock(id, locChips(STOCK_TYPES, id)) : locChips(STOCK_TYPES); s.fixedTo = 'X'; s.project = true; }
+        break;
+      case 'used':
+        s.type = 'pull'; s.fixedFrom = me(); s.fixedTo = 'X'; s.project = true;
         break;
       case 'return':
         // כלי, או מתכלה שרשום על העובד (הועבר אליו, לא נמשך לפרויקט) – העברה ממנו למחסן
@@ -397,7 +401,7 @@
 
   function autoProject(v) {
     const s = spec(v);
-    if (!s.project) return;
+    if (!s.project || v.projectId === '_other') return;
     let chips = projectChips(v.from);
     if (v.action === 'return' && !v.projectId) {
       const p = myPulls().filter(x => x.itemId === v.itemId);
@@ -439,11 +443,16 @@
     if (s.project) {
       const chips = projectChips(s.from ? v.from : '');
       const cont = v.from && S.ix.locs[v.from.slice(2)];
-      if (chips.length === 1 && cont && cont.type === 'container') {
+      // "אחר" – פרויקט שעוד לא קיים במערכת, או שימוש כללי (לא בהחזרת עודף – היא תמיד לפרויקט שממנו נמשך)
+      const other = s.type !== 'return_surplus';
+      if (chips.length === 1 && cont && (cont.type === 'container' || cont.type === 'cart') && v.projectId !== '_other') {
         h += '<div class="field"><div class="label">' + esc(TX.project) + '</div><div class="hint" style="font-size:15px">' +
-          esc(fmt(TX.projectAuto, { project: chips[0].label, container: cont.name })) + '</div></div>';
+          esc(fmt(TX.projectAuto, { project: chips[0].label, container: cont.name })) + '</div>' +
+          (other ? '<button class="link" data-a="chip" data-field="projectId" data-v="_other" style="padding:4px 0">' + esc(TX.otherProjectLink) + '</button>' : '') + '</div>';
       } else {
-        h += '<div class="field"><div class="label">' + esc(TX.project) + '</div>' + chipsHtml('projectId', chips, v.projectId) + '</div>';
+        h += '<div class="field"><div class="label">' + esc(TX.project) + '</div>' +
+          chipsHtml('projectId', other ? chips.concat([chip('_other', TX.otherProject)]) : chips, v.projectId) +
+          (v.projectId === '_other' ? '<input id="projNote" class="text" maxlength="120" style="margin-top:8px" placeholder="' + esc(TX.otherProjectQ) + '" value="' + esc(v.projectNote || '') + '">' : '') + '</div>';
       }
     }
     if (s.to) h += '<div class="field"><div class="label">' + esc(TX.to) + '</div>' + chipsHtml('to', s.to.filter(c => c.h !== v.from), v.to) + '</div>';
@@ -562,7 +571,11 @@
       return h + '<div class="hint">' + esc(TX.pullsHint) + '</div></main>';
     }
     if (!tools.length) return h + '<div class="empty">' + esc(TX.toolsEmpty) + '</div></main>';
-    return h + '<div class="list">' + tools.map(t => itemRow(t.itemId, { a: 'card', qty: qtyLabel(t.qty, t.itemId) })).join('') + '</div></main>';
+    return h + '<div class="list">' + tools.map(t => kindOf(t.itemId) === 'tool'
+      ? itemRow(t.itemId, { a: 'card', qty: qtyLabel(t.qty, t.itemId) })
+      : '<div class="row"><span class="grow"><div class="name">' + esc(displayName(t.itemId)) + '</div><div class="sub">' + esc(pathNames(t.itemId).join(' › ')) + '</div></span>' +
+        '<span class="qty">' + esc(qtyLabel(t.qty, t.itemId)) + '</span><button class="mini" data-a="used" data-id="' + t.itemId + '">' + esc(TX.actions.used) + '</button></div>'
+    ).join('') + '</div><div class="hint">' + esc(TX.usedHint) + '</div></main>';
   };
 
   VIEWS.message = v => top('', false) + '<div class="center">' + esc(v.text) + '</div>';
@@ -609,6 +622,7 @@
     go({ v: 'pick', action: a, q: '' });
   };
   H.pickItem = el => go({ v: 'finish', action: cur().action, itemId: el.dataset.id, projectId: el.dataset.project || '', held: el.dataset.held === '1' });
+  H.used = el => go({ v: 'finish', action: 'used', itemId: el.dataset.id });
   H.returnSurplus = el => go({ v: 'finish', action: 'return', itemId: el.dataset.id, projectId: el.dataset.project });
   H.unknown = () => go({ v: 'unknown', action: cur().action || 'take', text: cur().q || '' });
   H.unknownGo = () => {
@@ -683,6 +697,8 @@
     if (q) v.qty = q.value;
     const n = document.getElementById('note');
     if (n) v.note = n.value;
+    const pn = document.getElementById('projNote');
+    if (pn) v.projectNote = pn.value;
     document.querySelectorAll('input[data-line]').forEach(i => { v.qtys[i.dataset.line] = i.value; });
   }
 
@@ -743,8 +759,9 @@
     let projectId = '';
     if (s.project) {
       const chips = projectChips(s.from ? v.from : '');
-      projectId = chips.length === 1 ? chips[0].h : v.projectId;
+      projectId = v.projectId === '_other' ? '_other' : chips.length === 1 ? chips[0].h : v.projectId;
       if (!projectId) return fail(fmt(TX.missing, { field: TX.project }));
+      if (projectId === '_other' && !String(v.projectNote || '').trim()) return fail(fmt(TX.missing, { field: TX.otherProjectQ }));
     }
     if (s.supplier && v.action === 'returnSupplier' && !v.supplierId) return fail(fmt(TX.missing, { field: TX.supplier }));
     const type = s.what ? v.what : s.type;
@@ -759,10 +776,11 @@
       const okGo = await confirmBox(fmt(TX.overdraw, { place: holderName(from), n: num(qtyAt(v.itemId, from)) }), TX.overdrawYes);
       if (!okGo) return;
     }
-    if (projectId) store.set('lastProject', projectId);
+    if (projectId && projectId !== '_other') store.set('lastProject', projectId);
     const m = {
       clientKey: uuid(), clientAt: new Date().toISOString(), type, itemId: v.itemId || '', unknownText: v.unknownText || '',
       qty: s.counted ? null : qty, countedQty: s.counted ? qty : null, from, to, projectId,
+      projectNote: projectId === '_other' ? String(v.projectNote || '').trim() : '',
       supplierId: v.supplierId && v.supplierId !== '_other' ? v.supplierId : '', note: v.note || '',
     };
     const label = per > 1 ? num(typed) + ' ' + item(v.itemId).buyUnitName + ' (' + qtyLabel(qty, v.itemId) + ')'
@@ -781,7 +799,9 @@
     });
     if (!ms.length) { document.getElementById('err').textContent = TX.qtyMissing; return; }
     const o = S.ix.orders[v.orderId];
-    enqueue(ms, fmt(TX.receivedOk, { number: o.number }));
+    // מה עוד חסר אחרי הקבלה הזו (ההזמנה נסגרת לבד כשהכל הגיע)
+    const missing = lines.filter(x => (Number(v.qtys[x.line.id]) || 0) < x.remaining).length;
+    enqueue(ms, missing ? fmt(TX.receivedSome, { number: o.number, n: missing }) : fmt(TX.receivedAll, { number: o.number }));
   }
 
   // נכנס לתור, מתעדכן מיד במסך, ונשלח ברקע
@@ -814,7 +834,7 @@
         t.qty += m.to === me() ? m.qty : -m.qty;
         p.tools = p.tools.filter(x => x.qty > 0);
       }
-      if (m.type === 'pull' || m.type === 'return_surplus') {
+      if ((m.type === 'pull' || m.type === 'return_surplus') && m.from !== me() && m.projectId !== '_other') {
         let g = p.pulls.find(x => x.itemId === m.itemId && x.projectId === m.projectId);
         if (!g && m.type === 'pull') { g = { itemId: m.itemId, projectId: m.projectId, qty: 0, lastAt: m.clientAt, lastFrom: m.from }; p.pulls.unshift(g); }
         if (g) {

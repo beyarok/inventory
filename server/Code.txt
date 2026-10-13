@@ -51,8 +51,9 @@ const DEFAULT_SETTINGS = {
 
 const DEFAULT_UNITS = ['יחידה', 'מטר', 'גליל', 'קרטון', 'ליטר', 'קילו', 'זוג'];
 
-const LOCATION_TYPES = ['hub', 'container', 'vehicle', 'repair'];
-const STOCK_LOCATION_TYPES = ['hub', 'container'];   // נספרים מול המינימום
+const LOCATION_TYPES = ['hub', 'container', 'cart', 'vehicle', 'repair'];  // vehicle – רק לנתונים ישנים
+const STOCK_LOCATION_TYPES = ['hub', 'container', 'cart'];   // נספרים מול המינימום
+const SITE_LOCATION_TYPES = ['container', 'cart'];           // משויכים לפרויקטים
 
 // סוגי התנועות. field = מותר לעובד שטח. from/to = סוגי מחזיקים מותרים:
 // L = מקום, P = אדם, S = ספק, X = נצרך/יצא, R = מקום מסוג "בתיקון"
@@ -474,6 +475,7 @@ const Model = (() => {
     Db.all('Movements').forEach(m => {
       if (m.byPersonId !== personId || reversed[m.id] || !openProjects[m.projectId] || !m.itemId) return;
       if (m.type !== 'pull' && m.type !== 'return_surplus') return;
+      if (m.type === 'pull' && String(m.from).indexOf('P:') === 0) return; // "השתמשתי" במה שהיה רשום עליו – אין עודף להחזיר
       const key = m.projectId + '|' + m.itemId;
       const g = groups[key] = groups[key] || { projectId: m.projectId, itemId: m.itemId, qty: 0, lastAt: '', lastFrom: '' };
       if (m.type === 'pull') {
@@ -664,7 +666,14 @@ function recordMovement_(inp, actor, isAdmin) {
 
   // ---- פרויקט ----
   const needsProject = type === 'pull' || type === 'return_surplus' || (type === 'purchase' && m.to === 'X');
-  if (needsProject) {
+  // "אחר": פרויקט שהמנהל עוד לא הוסיף, או שימוש כללי – כותבים בטקסט, והמנהל משייך אחר כך
+  if (needsProject && type !== 'return_surplus' && m.projectId === '_other') {
+    const text = String(inp.projectNote || '').trim();
+    if (!text) userError_(MSG.missing + 'פרויקט');
+    m.projectId = '';
+    m.note = ('פרויקט: ' + text + (m.note ? ' · ' + m.note : '')).slice(0, 500);
+    flags.push('noProject');
+  } else if (needsProject) {
     const pr = Db.byId('Projects', m.projectId);
     if (!pr || pr.archived) userError_(MSG.missing + 'פרויקט');
     if (pr.status !== 'open') userError_('הפרויקט הזה סגור');
@@ -720,6 +729,19 @@ function unitPriceFromLine_(line, order) {
   let p = line.unitPriceBuy / per;
   if (order.pricesIncludeVat) p = p / (1 + (order.vatRate || 0) / 100);
   return Math.round(p * 10000) / 10000;
+}
+
+// מנהל משייך לפרויקט דיווח שנרשם עם "פרויקט אחר"
+function setMovementProject_(id, projectId, actor) {
+  const m = Db.byId('Movements', id);
+  if (!m || String(m.flags).indexOf('noProject') < 0) userError_(MSG.missing + 'דיווח');
+  const pr = Db.byId('Projects', projectId);
+  if (!pr || pr.archived) userError_(MSG.missing + 'פרויקט');
+  const flags = String(m.flags).split(',').filter(f => f && f !== 'noProject').join(',');
+  Db.update('Movements', id, { projectId: pr.id, flags });
+  log_(actor, 'setProject', 'Movements', id, pr.name);
+  Model.reset();
+  return { id, projectId: pr.id };
 }
 
 // ==================== Orders.gs ====================
@@ -1187,7 +1209,7 @@ function projectCloseCheck_(id) {
 function assignContainer_(containerId, projectId, assign, actor) {
   const loc = Db.byId('Locations', containerId);
   const pr = Db.byId('Projects', projectId);
-  if (!loc || loc.type !== 'container' || !pr) userError_(MSG.conflict);
+  if (!loc || SITE_LOCATION_TYPES.indexOf(loc.type) < 0 || !pr) userError_(MSG.conflict);
   const current = Db.all('ContainerProjects').find(c => c.containerId === containerId && c.projectId === projectId && !c.to);
   if (assign && !current) Db.insert('ContainerProjects', { containerId, projectId, from: now_(), to: '' });
   if (!assign && current) Db.update('ContainerProjects', current.id, { to: now_() });
@@ -1292,6 +1314,7 @@ const ADMIN_ACTIONS = {
   'admin.items.quickAdd': (req, me) => quickAdd_(req.parentId || '', req.rows || [], me),
   'admin.movement.add': (req, me) => recordMovement_(req.movement || {}, me, true),
   'admin.movement.reverse': (req, me) => reverseMovement_(req.id, me, true),
+  'admin.movement.setProject': (req, me) => setMovementProject_(req.id, req.projectId, me),
   'admin.unknown.resolve': (req, me) => strip_(resolveUnknown_(req.id, req.itemId, me)),
   'admin.purchase.setPrice': (req, me) => strip_(setPurchasePrice_(req.movementId, req.unitPrice, req.includesVat, req.supplierId, me)),
   'admin.order.save': (req, me) => strip_(saveOrder_(req.order || {}, me)),

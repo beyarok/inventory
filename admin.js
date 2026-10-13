@@ -2,7 +2,8 @@
 
 (() => {
   const TA = T.admin;
-  const STOCK_TYPES = ['hub', 'container'];
+  const STOCK_TYPES = ['hub', 'container', 'cart'];
+  const SITE_TYPES = ['container', 'cart']; // מכולה / עגלה – משויכות לפרויקטים
 
   // ---------- עזרים ----------
   const esc = s => String(s === null || s === undefined ? '' : s)
@@ -19,6 +20,7 @@
     orders: svg('<circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M3 4h2l2.5 11h11L21 7H7"/>'),
     projects: svg('<path d="M4 21V5l8-3 8 3v16"/><path d="M9 21v-5h6v5"/>'),
     reports: svg('<path d="M5 20V12M12 20V5M19 20v-9"/>'),
+    suppliers: svg('<path d="M3 7h11v10H3z"/><path d="M14 10h4l3 3v4h-7"/><circle cx="7" cy="18" r="1.6"/><circle cx="17" cy="18" r="1.6"/>'),
     lists: svg('<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>'),
     archive: svg('<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10h14V9M10 13h4"/>'),
     settings: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'),
@@ -318,11 +320,12 @@
     const unknown = t.UnknownItems.filter(u => u.status === 'open');
     const weekAgo = now - 7 * 86400000;
     const overdraws = t.Movements.filter(m => String(m.flags).indexOf('overdraw') >= 0 && !A.ix.reversed[m.id] && Date.parse(m.at) > weekAgo);
-    return { belowMin, late, missingPrice, unknown, overdraws };
+    const noProject = t.Movements.filter(m => String(m.flags).indexOf('noProject') >= 0 && !A.ix.reversed[m.id]);
+    return { belowMin, late, missingPrice, unknown, overdraws, noProject };
   }
 
   // ---------- תצוגה ----------
-  const SECTIONS = ['home', 'stock', 'items', 'orders', 'projects', 'reports', 'lists', 'archive', 'settings', 'help'];
+  const SECTIONS = ['home', 'stock', 'items', 'orders', 'suppliers', 'projects', 'reports', 'lists', 'archive', 'settings', 'help'];
   const VIEW = {};
 
   function render() {
@@ -403,7 +406,7 @@
     const h = new Date().getHours();
     const hello = fmt(h < 12 ? TA.goodMorning : h < 17 ? TA.goodNoon : TA.goodEvening, { name: A.d.me.name });
     const card = (n, label, s, cls) => '<button class="card ' + (n ? cls : '') + '" data-a="section" data-s="' + s + '"><span class="n">' + n + '</span>' + esc(label) + '</button>';
-    const any = dg.belowMin.length + dg.late.length + dg.missingPrice.length + dg.unknown.length + dg.overdraws.length;
+    const any = dg.belowMin.length + dg.late.length + dg.missingPrice.length + dg.unknown.length + dg.overdraws.length + dg.noProject.length;
     const moves = A.d.tables.Movements.slice(-15).reverse();
     return '<h1>' + esc(hello) + '</h1>' +
       (any ? '<div class="cards">' +
@@ -411,7 +414,8 @@
         card(dg.late.length, TA.cardLate, 'orders', 'warn') +
         card(dg.missingPrice.length, TA.cardMissingPrice, 'orders', 'warn') +
         card(dg.unknown.length, TA.cardUnknown, 'items', 'warn') +
-        card(dg.overdraws.length, TA.cardOverdraw, 'stock', 'warn') + '</div>'
+        card(dg.overdraws.length, TA.cardOverdraw, 'stock', 'warn') +
+        (dg.noProject.length ? '<button class="card warn" data-a="noProjectList"><span class="n">' + dg.noProject.length + '</span>' + esc(TA.cardNoProject) + '</button>' : '') + '</div>'
         : '<div class="box">' + esc(TA.allGood) + '</div>') +
       '<h2>' + esc(TA.recentMoves) + '</h2><div class="box" style="padding:0"><table>' +
       moves.map(m => moveRow(m, false)).join('') +
@@ -422,7 +426,7 @@
   function moveRow(m, full) {
     const dead = A.ix.reversed[m.id] || m.type === 'reversal';
     const uk = !m.itemId && A.d.tables.UnknownItems.find(u => u.movementId === m.id);
-    const what = esc(TA.moveTypes[m.type] || m.type) + ' ' + (m.qty ? num(m.qty) + ' ' + esc(m.itemId ? unitLabel(m.itemId) : '') + ' ' : '') +
+    const what = esc(m.type === 'pull' && String(m.from).indexOf('P:') === 0 ? TA.usedMove : (TA.moveTypes[m.type] || m.type)) + ' ' + (m.qty ? num(m.qty) + ' ' + esc(m.itemId ? unitLabel(m.itemId) : '') + ' ' : '') +
       esc(m.itemId ? displayName(m.itemId) : uk ? '"' + uk.text + '"' : '') +
       (A.ix.reversed[m.id] ? ' <span class="tag">' + esc(TA.reversedTag) + '</span>' : '') +
       (String(m.flags).indexOf('overdraw') >= 0 ? ' <span class="tag" style="background:var(--warn-bg);color:var(--warn)">' + esc(TA.overdrawTag) + '</span>' : '');
@@ -442,6 +446,7 @@
     if (t) parts.push(t);
     let s = parts.join(' ← ');
     if (m.projectId && A.ix.projects[m.projectId]) s += (s ? ' · ' : '') + A.ix.projects[m.projectId].name;
+    else if (String(m.flags).indexOf('noProject') >= 0) s += (s ? ' · ' : '') + TA.noProjectTag;
     return s;
   }
 
@@ -586,6 +591,9 @@
   const unitLabel = id => { const u = unitName(id); return u === 'יחידה' ? '' : u; };
   const leaves = () => A.d.tables.Items.filter(i => !i.archived && isLeaf(i.id));
   const hasMin = it => it.minQty !== null && it.minQty !== '';
+  // "מתקרב למינימום": עד פי 1.5 מהמינימום (צהוב) – מחושב לבד, בלי עוד מספר להקליד
+  const NEAR = 1.5;
+  const nearMin = (it, w) => hasMin(it) && it.minQty > 0 && w >= it.minQty && w < it.minQty * NEAR;
 
   // "משך לפרויקטים פתוחים" – אותו חישוב כמו בשרת
   function pullsOf(personId) {
@@ -595,6 +603,7 @@
     A.d.tables.Movements.forEach(m => {
       if (m.byPersonId !== personId || A.ix.reversed[m.id] || !open[m.projectId] || !m.itemId) return;
       if (m.type !== 'pull' && m.type !== 'return_surplus') return;
+      if (m.type === 'pull' && String(m.from).indexOf('P:') === 0) return; // "השתמשתי"
       const k = m.projectId + '|' + m.itemId;
       g[k] = g[k] || { projectId: m.projectId, itemId: m.itemId, qty: 0 };
       g[k].qty += m.type === 'pull' ? m.qty : -m.qty;
@@ -641,14 +650,15 @@
       const w = warehouseQty(it.id);
       const min = hasMin(it) ? it.minQty : null;
       const low = min !== null && w < min;
+      const near = nearMin(it, w);
       const scale = Math.max(w, (min || 0) * 2, 1);
       const bar = min !== null
-        ? '<div class="barw"><div class="bar' + (low ? ' r' : '') + '" style="width:' + Math.max(0, Math.min(100, w / scale * 100)) + '%"></div><div class="mk" style="right:' + (min / scale * 100) + '%"></div></div>'
+        ? '<div class="barw"><div class="bar' + (low ? ' r' : near ? ' y' : '') + '" style="width:' + Math.max(0, Math.min(100, w / scale * 100)) + '%"></div><div class="mk" style="right:' + (min / scale * 100) + '%"></div></div>'
         : '';
       const open = A.stockOpen[it.id];
       const row = A.d.stock[it.id] || {};
       return '<div class="srow"><div class="stop" data-a="stockToggle" data-id="' + it.id + '"><span><b>' + esc(displayName(it.id)) + '</b> <span class="muted small">' + esc(pathOf(it.id).map(p => p.name).join(' › ')) + '</span></span>' +
-        '<span class="' + (low ? 'lowtxt' : '') + '">' + (min !== null ? esc(fmt(TA.qtyOfMin, { qty: num(w), min: num(min), unit: unitLabel(it.id) })) : num(w) + ' ' + esc(unitLabel(it.id))) +
+        '<span class="' + (low ? 'lowtxt' : near ? 'neartxt' : '') + '">' + (min !== null ? esc(fmt(TA.qtyOfMin, { qty: num(w), min: num(min), unit: unitLabel(it.id) })) : num(w) + ' ' + esc(unitLabel(it.id))) +
         (onOrder(it.id) ? ' <span class="tag g">' + esc(TA.cOnOrder) + ' ' + num(onOrder(it.id)) + '</span>' : '') + '</span></div>' + bar +
         (open ? '<div class="sexp">' + Object.keys(row).filter(k => row[k]).map(k => '<span>' + esc(holderName(k)) + ': ' + num(row[k]) + '</span>').join('') +
           '<button class="btn sm" data-a="setQty" data-id="' + it.id + '">' + esc(TA.setQty) + '</button><button class="btn sm" data-a="moveStock" data-id="' + it.id + '">' + esc(TA.moveStock) + '</button></div>' : '') + '</div>';
@@ -660,14 +670,15 @@
     const sum = (id, pred) => { const row = A.d.stock[id] || {}; return Object.keys(row).filter(pred).reduce((s, k) => s + row[k], 0); };
     const isType = t => k => k.indexOf('L:') === 0 && (A.ix.locs[k.slice(2)] || {}).type === t;
     list.sort((a, b) => displayName(a.id).localeCompare(displayName(b.id), 'he', { numeric: true }));
+    const vehicles = A.d.tables.Locations.some(l => l.type === 'vehicle' && !l.archived);
     return '<div class="box" style="padding:0;overflow:auto"><table><tr><th>' + esc(TA.cItem) + '</th>' + locs.map(l => '<th>' + esc(l.name) + '</th>').join('') +
-      '<th>' + esc(TA.vehicles) + '</th><th>' + esc(TA.people) + '</th><th>' + esc(TA.total) + '</th><th>' + esc(TA.fMin) + '</th></tr>' +
+      (vehicles ? '<th>' + esc(TA.vehicles) + '</th>' : '') + '<th>' + esc(TA.people) + '</th><th>' + esc(TA.total) + '</th><th>' + esc(TA.fMin) + '</th></tr>' +
       list.map(it => {
         const w = warehouseQty(it.id);
         const low = hasMin(it) && w < it.minQty;
         const cell = n => '<td>' + (n ? num(n) : '<span class="muted">–</span>') + '</td>';
-        return '<tr' + (low ? ' class="lowrow"' : '') + '><td>' + esc(displayName(it.id)) + '</td>' + locs.map(l => cell((A.d.stock[it.id] || {})['L:' + l.id])).join('') +
-          cell(sum(it.id, isType('vehicle'))) + cell(sum(it.id, k => k.indexOf('P:') === 0)) +
+        return '<tr' + (low ? ' class="lowrow"' : nearMin(it, w) ? ' class="nearrow"' : '') + '><td>' + esc(displayName(it.id)) + '</td>' + locs.map(l => cell((A.d.stock[it.id] || {})['L:' + l.id])).join('') +
+          (vehicles ? cell(sum(it.id, isType('vehicle'))) : '') + cell(sum(it.id, k => k.indexOf('P:') === 0)) +
           '<td><b>' + num(w) + '</b></td><td>' + (hasMin(it) ? num(it.minQty) : '') + '</td></tr>';
       }).join('') + '</table></div>';
   }
@@ -787,13 +798,34 @@
   function ordersTable(list, empty) {
     if (!list.length) return '<div class="box muted">' + esc(empty) + '</div>';
     list = list.slice().sort((a, b) => b.number - a.number);
-    return '<div class="box" style="padding:0"><table><tr><th>' + esc(TA.cNumber) + '</th><th>' + esc(TA.fSupplier) + '</th><th>' + esc(TA.fDest) + '</th><th>' + esc(TA.cStatus) + '</th><th>' + esc(TA.cDate) + '</th><th>' + esc(TA.cSum) + '</th></tr>' +
+    return '<div class="box" style="padding:0;overflow:auto"><table><tr><th>' + esc(TA.cNumber) + '</th><th>' + esc(TA.fSupplier) + '</th><th>' + esc(TA.fDest) + '</th><th>' + esc(TA.cStatus) + '</th>' +
+      '<th>' + esc(TA.cOpened) + '</th><th>' + esc(TA.cSent) + '</th><th>' + esc(TA.cLastReceived) + '</th><th>' + esc(TA.cSum) + '</th></tr>' +
       list.map(o => {
         const late = lateDays(o);
         return '<tr class="click" data-a="openOrder" data-id="' + o.id + '"><td>' + o.number + '</td><td>' + esc((A.ix.sups[o.supplierId] || {}).name) + '</td><td>' + esc((A.ix.locs[o.destId] || {}).name) +
           '</td><td><span class="tag ' + (o.status === 'received' ? 'g' : '') + '">' + esc(TA.statuses[o.status]) + '</span>' + (late ? ' <span class="tag" style="background:var(--warn-bg);color:var(--warn)">' + esc(fmt(TA.late, { n: late })) + '</span>' : '') +
-          '</td><td>' + shortDate(o.sentAt || o.createdAt) + '</td><td>' + money(orderTotals(o, linesOf(o.id)).after) + '</td></tr>';
+          '</td><td>' + shortDate(o.createdAt) + '</td><td>' + shortDate(o.sentAt) + '</td><td>' + shortDate((receiptsOf(o.id).slice(-1)[0] || {}).at) + '</td><td>' + money(orderTotals(o, linesOf(o.id)).after) + '</td></tr>';
       }).join('') + '</table></div>';
+  }
+
+  // קבלות של הזמנה, מקובצות לפי מסירה (אותו עובד, אותה דקה)
+  function receiptsOf(orderId) {
+    const groups = [];
+    A.d.tables.Movements.filter(m => m.orderId === orderId && m.type === 'receive' && !A.ix.reversed[m.id]).forEach(m => {
+      const at = m.clientAt || m.at;
+      const g = groups.find(x => x.by === m.byPersonId && Math.abs(Date.parse(x.at) - Date.parse(at)) < 120000);
+      if (g) g.n += 1; else groups.push({ at, by: m.byPersonId, n: 1 });
+    });
+    return groups.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  }
+  function orderTimeline(o) {
+    const ev = [];
+    ev.push({ at: o.createdAt, text: fmt(TA.evOpened, { who: (A.ix.people[o.createdBy] || {}).name || '' }) });
+    if (o.sentAt) ev.push({ at: o.sentAt, text: TA.evSent });
+    receiptsOf(o.id).forEach(g => ev.push({ at: g.at, text: fmt(g.n === 1 ? TA.evReceived1 : TA.evReceived, { n: g.n, who: (A.ix.people[g.by] || {}).name || '' }) }));
+    if (o.closedAt) ev.push({ at: o.closedAt, text: o.status === 'received' ? TA.evDone : o.status === 'canceled' ? TA.evCanceled : TA.evClosed });
+    return '<div class="box" style="margin-top:12px"><h2 style="margin-top:0">' + esc(TA.orderHistory) + '</h2>' +
+      ev.filter(e => e.at).map(e => '<div class="kv"><span>' + esc(e.text) + '</span><span class="muted">' + esc(when(e.at)) + '</span></div>').join('') + '</div>';
   }
 
   function orderView(o) {
@@ -834,6 +866,7 @@
       '<button class="btn" data-a="orderPdf">' + esc(TA.downloadPdf) + '</button>' +
       (o.status === 'sent' || o.status === 'partial' ? '<button class="btn" data-a="orderClose">' + esc(TA.closePartial) + '</button>' : '') +
       ((draft || o.status === 'sent') && !lines.some(l => A.d.receivedByLine[l.id]) ? '<button class="btn danger" data-a="orderCancel">' + esc(TA.cancelOrder) + '</button>' : '') + '</div>';
+    if (!draft) h += orderTimeline(o);
     return h;
   }
 
@@ -905,7 +938,7 @@
     const p = A.ix.projects[A.projectId];
     if (!p || p.archived) return '<div class="box muted">' + esc(TA.chooseProject) + '</div>';
     const assigned = A.d.tables.ContainerProjects.filter(c => c.projectId === p.id && !c.to);
-    const freeContainers = A.d.tables.Locations.filter(l => l.type === 'container' && !l.archived && !assigned.some(c => c.containerId === l.id));
+    const freeContainers = A.d.tables.Locations.filter(l => SITE_TYPES.indexOf(l.type) >= 0 && !l.archived && !assigned.some(c => c.containerId === l.id));
     const rows = consumption(m => m.projectId === p.id);
     const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
     const byItem = {};
@@ -1190,6 +1223,7 @@
       '</table><div class="btns" style="margin-top:10px"><button class="btn" data-a="addAdmin">' + ICON.plus + esc(TA.sAddAdmin) + '</button></div></div>' +
       '<div class="box" style="margin-top:12px"><h2 style="margin-top:0">' + esc(TA.sBackup) + '</h2><div class="hint" style="margin-bottom:8px">' + esc(TA.sBackupHint) + '</div>' +
       '<button class="btn" data-a="backupNow">' + esc(TA.backupNow) + '</button></div>' +
+      '<div class="box" style="margin-top:12px"><h2 style="margin-top:0">' + esc(TA.listTabs.Units) + '</h2><div class="btns" style="margin-bottom:8px">' + listButtons('Units') + '</div>' + listTable('Units') + '</div>' +
       (window.ENGINE ? '<div class="box" style="margin-top:12px"><h2 style="margin-top:0">' + esc(TA.sNotify) + '</h2><div class="hint" style="margin-bottom:8px">' + esc(TA.sNotifyHint) + '</div>' +
         '<button class="btn" data-a="testNotify">' + esc(TA.testNotify) + '</button></div>' : '');
   };
@@ -1247,7 +1281,7 @@
     ],
     Locations: [
       { k: 'name', label: TA.fName },
-      { k: 'type', label: TA.fType, type: 'select', options: Object.keys(TA.locTypes).map(k => [k, TA.locTypes[k]]) },
+      { k: 'type', label: TA.fType, type: 'select', options: Object.keys(TA.locTypes).filter(k => k !== 'vehicle').map(k => [k, TA.locTypes[k]]) },
       { k: 'address', label: TA.fAddress },
     ],
     Suppliers: [
@@ -1256,32 +1290,44 @@
     Units: [{ k: 'name', label: TA.fName }],
   };
 
-  VIEW.lists = () => {
-    const ent = A.listTab;
+  // טבלת רשימה (אנשים / מקומות / ספקים / יחידות) עם הוספה, עריכה והסרה
+  function listTable(ent) {
     const rows = A.d.tables[ent].filter(r => A.showArchived || !r.archived)
       .sort((a, b) => (a.archived - b.archived) || a.name.localeCompare(b.name, 'he'));
     const fields = LIST_FIELDS[ent];
     const cell = (r, f) => {
+      if (f.k === 'type' && ent === 'Locations') return esc(TA.locTypes[r.type] || '');
       if (f.type === 'select') return esc((f.options.find(o => o[0] === r[f.k]) || [, ''])[1]);
       if (f.type === 'check') return r[f.k] ? '✓' : '';
       return esc(r[f.k]);
     };
-    return '<h1>' + esc(TA.menu.lists) + '</h1><div class="btns" style="margin-bottom:12px"><div class="seg">' +
-      Object.keys(TA.listTabs).map(k => '<button class="' + (k === ent ? 'on' : '') + '" data-a="listTab" data-t="' + k + '">' + esc(TA.listTabs[k]) + '</button>').join('') +
-      '</div><button class="btn p" data-a="listAdd">' + ICON.plus + esc(TA.add) + '</button>' +
-      '<label class="small muted inline"><input type="checkbox" data-a="toggleArchived"' + (A.showArchived ? ' checked' : '') + '> ' + esc(TA.showArchived) + '</label></div>' +
-      '<div class="box" style="padding:0;overflow:auto"><table><tr>' + fields.map(f => '<th>' + esc(f.label) + '</th>').join('') + '<th></th></tr>' +
+    const e = ' data-ent="' + ent + '"';
+    return '<div class="box" style="padding:0;overflow:auto"><table><tr>' + fields.map(f => '<th>' + esc(f.label) + '</th>').join('') + '<th></th></tr>' +
       (rows.length ? rows.map(r => '<tr' + (r.archived ? ' class="arch"' : '') + '>' + fields.map(f => '<td>' + cell(r, f) + '</td>').join('') +
         '<td><div class="btns" style="justify-content:flex-end">' + (r.archived
-          ? '<span class="tag">' + esc(TA.archivedTag) + '</span><button class="btn sm" data-a="listRestore" data-id="' + r.id + '">' + esc(TA.restore) + '</button>'
+          ? '<span class="tag">' + esc(TA.archivedTag) + '</span><button class="btn sm" data-a="listRestore"' + e + ' data-id="' + r.id + '">' + esc(TA.restore) + '</button>'
           : (ent === 'People' && r.token ? '<button class="btn sm" data-a="copyLink" data-id="' + r.id + '">' + esc(TA.copyLink) + '</button>' +
             (r.role === 'admin' && window.ENGINE ? '<button class="btn sm" data-a="copyFieldLink" data-id="' + r.id + '">' + esc(TA.copyFieldLink) + '</button>' : '') +
             '<button class="btn sm" data-a="newLink" data-id="' + r.id + '">' + esc(TA.newLink) + '</button>' : '') +
-            '<button class="btn sm" data-a="listEdit" data-id="' + r.id + '">' + esc(TA.edit) + '</button>' +
-            '<button class="btn sm danger" data-a="listArchive" data-id="' + r.id + '">' + esc(TA.remove) + '</button>') +
+            '<button class="btn sm" data-a="listEdit"' + e + ' data-id="' + r.id + '">' + esc(TA.edit) + '</button>' +
+            '<button class="btn sm danger" data-a="listArchive"' + e + ' data-id="' + r.id + '">' + esc(TA.remove) + '</button>') +
         '</div></td></tr>').join('') : '<tr><td colspan="9" class="muted">' + esc(TA.emptyList) + '</td></tr>') +
       '</table></div>';
+  }
+  const listButtons = ent => '<button class="btn p" data-a="listAdd" data-ent="' + ent + '">' + ICON.plus + esc(TA.add) + '</button>' +
+    '<label class="small muted inline"><input type="checkbox" data-a="toggleArchived"' + (A.showArchived ? ' checked' : '') + '> ' + esc(TA.showArchived) + '</label>';
+
+  // אנשים ומקומות
+  VIEW.lists = () => {
+    if (['People', 'Locations'].indexOf(A.listTab) < 0) A.listTab = 'People';
+    const ent = A.listTab;
+    return '<h1>' + esc(TA.menu.lists) + '</h1><div class="btns" style="margin-bottom:12px"><div class="seg">' +
+      ['People', 'Locations'].map(k => '<button class="' + (k === ent ? 'on' : '') + '" data-a="listTab" data-t="' + k + '">' + esc(TA.listTabs[k]) + '</button>').join('') +
+      '</div>' + listButtons(ent) + '</div>' + listTable(ent);
   };
+
+  // ספקים (בהמשך: כרטיס ספק עם מחירונים)
+  VIEW.suppliers = () => '<h1>' + esc(TA.menu.suppliers) + '</h1><div class="btns" style="margin-bottom:12px">' + listButtons('Suppliers') + '</div>' + listTable('Suppliers');
 
   // קישור אישי: עובד – למסך השטח; מנהל (בגרסת Firebase) – למסך הניהול
   // מנהל בשטח: מסך השטח עם הקישור האישי שלו (הדיווחים נרשמים על שמו)
@@ -2017,15 +2063,15 @@
 
   H.listTab = el => { A.listTab = el.dataset.t; render(); };
   H.toggleArchived = el => { A.showArchived = el.checked; render(); };
-  H.listAdd = async () => {
-    const ent = A.listTab;
+  H.listAdd = async el => {
+    const ent = (el && el.dataset.ent) || A.listTab;
     const defaults = { People: { role: 'field', alerts: false }, Locations: { type: 'container' } }[ent] || {};
     formBox(TA.add + ' · ' + TA.listTabs[ent], LIST_FIELDS[ent], defaults,
       withNameCheck(ent, null, values => saveQuiet(ent, values)));
   };
   H.listEdit = async el => {
     if (waitTmp(el.dataset.id)) return;
-    const ent = A.listTab;
+    const ent = el.dataset.ent || A.listTab;
     const rec = A.d.tables[ent].find(x => x.id === el.dataset.id);
     formBox(TA.edit + ' · ' + rec.name, LIST_FIELDS[ent], rec,
       withNameCheck(ent, rec.id, values => saveQuiet(ent, Object.assign({ id: rec.id }, values))));
@@ -2044,7 +2090,7 @@
   }
   H.listArchive = async el => {
     if (waitTmp(el.dataset.id)) return;
-    const ent = A.listTab;
+    const ent = el.dataset.ent || A.listTab;
     const rec = A.d.tables[ent].find(x => x.id === el.dataset.id);
     if (ent === 'People' && Object.keys(A.d.stock).some(i => (A.d.stock[i]['P:' + rec.id] || 0) > 0)) {
       return toast(fmt(TA.personHasTools, { name: rec.name }), true);
@@ -2053,7 +2099,7 @@
     optimistic('admin.archive', { entity: ent, id: rec.id }, d => { d.tables[ent].find(x => x.id === rec.id).archived = true; });
     toast(fmt(TA.archived, { name: rec.name }));
   };
-  H.listRestore = el => restore(A.listTab, el.dataset.id);
+  H.listRestore = el => restore(el.dataset.ent || A.listTab, el.dataset.id);
   H.copyLink = async el => {
     const p = A.ix.people[el.dataset.id];
     const url = personUrl(p);
@@ -2067,6 +2113,28 @@
       bg.addEventListener('click', ev => { if (ev.target.closest('[data-close]')) closeModal(); });
     }
   };
+  // דיווחים עם "פרויקט אחר" – המנהל משייך לפרויקט
+  H.noProjectList = () => {
+    const list = digest().noProject;
+    const projects = A.d.tables.Projects.filter(p => !p.archived).sort((a, b) => (a.status !== 'open') - (b.status !== 'open'));
+    const bg = modal('<h3>' + esc(TA.cardNoProject) + '</h3><div class="hint">' + esc(TA.noProjectHint) + '</div>' +
+      '<div style="overflow:auto"><table>' + list.map(m => '<tr data-mv="' + m.id + '"><td class="small muted" style="white-space:nowrap">' + esc(when(m.clientAt || m.at)) + '</td><td>' +
+        esc((A.ix.people[m.byPersonId] || {}).name) + '</td><td>' + esc(num(m.qty) + ' ' + (m.itemId ? unitLabel(m.itemId) + ' ' + displayName(m.itemId) : '')) +
+        '<div class="small muted">' + esc(m.note) + '</div></td><td><select class="in" data-np style="max-width:160px"><option value="">—</option>' +
+        projects.map(p => '<option value="' + p.id + '">' + esc(p.name) + (p.status === 'open' ? '' : ' (' + TA.closedTag + ')') + '</option>').join('') +
+        '</select></td></tr>').join('') + '</table></div><div class="foot"><button class="btn p" data-r="save">' + esc(TA.save) + '</button><button class="btn" data-close="1">' + esc(TA.cancel) + '</button></div>', true);
+    bg.addEventListener('click', ev => {
+      if (ev.target.closest('[data-close]')) return closeModal();
+      if (!ev.target.closest('[data-r="save"]')) return;
+      const picks = [...bg.querySelectorAll('tr[data-mv]')].map(tr => ({ id: tr.dataset.mv, projectId: tr.querySelector('[data-np]').value })).filter(x => x.projectId);
+      closeModal();
+      picks.forEach(x => optimistic('admin.movement.setProject', { id: x.id, projectId: x.projectId }, d => {
+        const m = d.tables.Movements.find(y => y.id === x.id);
+        if (m) { m.projectId = x.projectId; m.flags = String(m.flags).split(',').filter(f => f && f !== 'noProject').join(','); }
+      }));
+    });
+  };
+
   // התקנה כאפליקציה במחשב (Chrome / Edge)
   H.install = async () => {
     const p = window.INSTALL_PROMPT;

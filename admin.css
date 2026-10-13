@@ -107,6 +107,9 @@ tr.arch td { color: var(--muted); }
 .barw { height: 8px; background: var(--beige); border-radius: 4px; position: relative; margin-top: 6px; }
 .bar { height: 8px; border-radius: 4px; background: var(--green); }
 .bar.r { background: #C24B3A; }
+.bar.y { background: #D9A021; }
+.neartxt { color: var(--warn); font-weight: 600; }
+tr.nearrow td { background: var(--warn-bg); }
 .mk { position: absolute; top: -3px; width: 2px; height: 14px; background: var(--brown); }
 .sexp { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-top: 8px; font-size: 13px; color: var(--brown-2); background: var(--beige-2); padding: 6px 10px; border-radius: 8px; }
 .lowtxt { color: var(--danger); font-weight: 600; }
