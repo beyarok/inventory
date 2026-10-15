@@ -901,6 +901,8 @@
     h += '<div class="btns">' +
       (draft ? '<button class="btn p" data-a="orderSave">' + esc(TA.saveDraft) + '</button><button class="btn p" data-a="orderSend">' + esc(TA.markSent) + '</button>' : '') +
       '<button class="btn" data-a="orderPdf">' + esc(TA.supplierDoc) + '</button>' +
+      (lines.some(l => (A.d.receivedByLine[l.id] || 0) < l.qtyBuy * (l.buyUnitQty || 1)) ? '<button class="btn" data-a="orderStatusDoc" data-kind="pending">' + esc(TA.docPending) + '</button>' : '') +
+      (lines.some(l => A.d.receivedByLine[l.id]) ? '<button class="btn" data-a="orderStatusDoc" data-kind="received">' + esc(TA.docReceived) + '</button>' : '') +
       (o.status === 'sent' || o.status === 'partial' ? '<button class="btn" data-a="orderClose">' + esc(TA.closePartial) + '</button>' : '') +
       ((draft || o.status === 'sent') && !lines.some(l => A.d.receivedByLine[l.id]) ? '<button class="btn danger" data-a="orderCancel">' + esc(TA.cancelOrder) + '</button>' : '') + '</div>';
     h += orderDocs(o);
@@ -2317,20 +2319,30 @@
     if (!(await confirmBox(fmt(TA.cancelConfirm, { number: o.number }), TA.cancelOrder, true))) return;
     mutate('admin.order.status', { id: o.id, status: 'cancel' });
   };
+  // מסמך שנפתח בחלון הדפסה (שם בוחרים "שמור כ-PDF")
+  function printHtml(html, fileName) {
+    const w = window.open('', '_blank');
+    if (!w) return toast(TA.error, true);
+    w.document.write(html.replace('<head>', '<head><title>' + esc(String(fileName || '').replace(/\.pdf$/, '')) + '</title>'));
+    w.document.close();
+    setTimeout(() => w.print(), 300);
+  }
+  // מצב הזמנה: יתרה לאספקה / מה התקבל
+  H.orderStatusDoc = async el => {
+    try {
+      const r = await api('admin.order.doc', { id: A.orderId, kind: el.dataset.kind });
+      if (!r.ok) return toast(r.error || TA.error, true);
+      printHtml(r.data.html, r.data.fileName);
+    } catch (e) {
+      toast(TA.error, true);
+    }
+  };
   H.orderPdf = async () => {
     try {
       if (A.drafts[A.orderId]) await saveDraft(A.orderId);
       const r = await api('admin.order.pdf', { id: A.orderId });
       if (!r.ok) return toast(r.error || TA.error, true);
-      // גרסת Firebase: ההזמנה נפתחת בחלון הדפסה (שם בוחרים "שמור כ-PDF")
-      if (r.data.html) {
-        const w = window.open('', '_blank');
-        if (!w) return toast(TA.error, true);
-        w.document.write(r.data.html.replace('<head>', '<head><title>' + esc(r.data.fileName.replace(/\.pdf$/, '')) + '</title>'));
-        w.document.close();
-        setTimeout(() => w.print(), 300);
-        return;
-      }
+      if (r.data.html) return printHtml(r.data.html, r.data.fileName);
       const bytes = Uint8Array.from(atob(r.data.base64), c => c.charCodeAt(0));
       const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
       const a = document.createElement('a');

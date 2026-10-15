@@ -989,6 +989,64 @@ function saveSupplierItems_(supplierId, rows, actor) {
   return Db.clean(Db.all('SupplierItems').filter(x => x.supplierId === sup.id));
 }
 
+// מסמך מצב הזמנה (להדפסה / לשליחה לספק):
+//   kind = 'pending'  – יתרה לאספקה: מה הוזמן, מה הגיע, מה עוד חסר
+//   kind = 'received' – מה התקבל, עם תאריך לכל משלוח
+function orderStatusDoc_(id, kind) {
+  const order = Db.byId('Orders', id);
+  if (!order) userError_(MSG.missing + 'הזמנה');
+  const supplier = Db.byId('Suppliers', order.supplierId) || {};
+  const dest = Db.byId('Locations', order.destId) || {};
+  const esc = s => String(s === null || s === undefined ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const fmtN = n => Number(Math.round(n * 100) / 100).toLocaleString('he-IL');
+  const d = iso => String(iso || '').slice(0, 10).split('-').reverse().join('.');
+  const received = Model.receivedByLine();
+  const reversed = Model.reversedIds_();
+  // משלוחים לכל שורה: תאריך + כמות
+  const deliveries = {};
+  Db.all('Movements').forEach(m => {
+    if (m.type !== 'receive' || !m.orderLineId || reversed[m.id]) return;
+    (deliveries[m.orderLineId] = deliveries[m.orderLineId] || []).push({ at: m.clientAt || m.at, qty: m.qty });
+  });
+  const pending = kind !== 'received';
+  const rows = [];
+  orderLines_(id).forEach(l => {
+    const it = Model.item(l.itemId) || {};
+    const per = l.buyUnitQty || 1;
+    const got = (received[l.id] || 0) / per;
+    const left = Math.max(0, l.qtyBuy - got);
+    if (pending ? left <= 0 : got <= 0) return;
+    const unitName = per > 1 ? it.buyUnitName || '' : (Db.byId('Units', Model.inherited(l.itemId, 'unitId')) || {}).name || '';
+    const code = (supplierItem_(order.supplierId, l.itemId) || {}).code || '';
+    const dels = (deliveries[l.id] || []).sort((a, b) => (a.at < b.at ? -1 : 1)).map(x => d(x.at) + ': ' + fmtN(x.qty / per)).join('<br>');
+    rows.push('<tr><td>' + (rows.length + 1) + '</td><td class="c">' + esc(code) + '</td><td>' + esc(it.name) + '</td><td>' + esc(unitName === 'יחידה' ? '' : unitName) + '</td>' +
+      '<td>' + fmtN(l.qtyBuy) + '</td><td>' + fmtN(got) + '</td>' +
+      (pending ? '<td><b>' + fmtN(left) + '</b></td>' : '<td class="c">' + dels + '</td>') + '</tr>');
+  });
+  const title = (pending ? 'יתרה לאספקה' : 'מה התקבל') + ' · הזמנה ' + order.number;
+  const details = String(Db.setting('companyDetails') || '');
+  const html = '<html dir="rtl"><head><meta charset="utf-8"><style>' +
+    '@page{size:A4;margin:14mm}body{font-family:Arial,sans-serif;color:#2b2118;font-size:12px;margin:0}' +
+    '.top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #4A3524;padding-bottom:10px}' +
+    '.co{color:#4A3524;font-size:20px;font-weight:bold}.cd{color:#8A7A68;font-size:11px;white-space:pre-line;margin-top:2px}' +
+    'h1{font-size:18px;margin:0;color:#4A3524;text-align:left}.meta{text-align:left;color:#555;font-size:11px;line-height:1.6}' +
+    '.box{margin:14px 0;line-height:1.7}.box b{color:#4A3524}' +
+    'table{width:100%;border-collapse:collapse;margin-top:6px}th{background:#4A3524;color:#fff;padding:6px;text-align:right;font-weight:normal}' +
+    'td{border-bottom:1px solid #E4DED2;padding:6px;vertical-align:top}td.c{color:#8A7A68;font-size:11px}.f{margin-top:26px;color:#8A7A68;font-size:10px}' +
+    '</style></head><body>' +
+    '<div class="top"><div><div class="co">' + esc(Db.setting('companyName')) + '</div>' + (details ? '<div class="cd">' + esc(details) + '</div>' : '') + '</div>' +
+    '<div><h1>' + esc(title) + '</h1><div class="meta">תאריך הזמנה: ' + esc(d(order.sentAt || order.createdAt)) + '<br>נכון ל-' +
+    Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'dd.MM.yyyy') + '</div></div></div>' +
+    '<div class="box"><b>לכבוד:</b> ' + esc(supplier.name) + (supplier.contact ? ' · ' + esc(supplier.contact) : '') + (supplier.phone ? ' · טל\' ' + esc(supplier.phone) : '') +
+    '<br><b>לאספקה ל:</b> ' + esc(dest.name) + (dest.address ? ' · ' + esc(dest.address) : '') +
+    (pending ? '<br>להלן הפריטים מההזמנה שעדיין לא סופקו. נבקש לעדכן מתי צפויה האספקה.' : '') + '</div>' +
+    (rows.length
+      ? '<table><tr><th>#</th><th>קוד ספק</th><th>תיאור</th><th>יחידה</th><th>הוזמן</th><th>התקבל</th>' + (pending ? '<th>חסר</th>' : '<th>משלוחים</th>') + '</tr>' + rows.join('') + '</table>'
+      : '<div class="box">' + (pending ? 'כל ההזמנה התקבלה – אין יתרה.' : 'עוד לא התקבל כלום מההזמנה הזו.') + '</div>') +
+    '<div class="f">הופק ב-' + Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'dd.MM.yyyy HH:mm') + '</div></body></html>';
+  return { fileName: title + ' - ' + (supplier.name || '') + '.pdf', html };
+}
+
 // ==================== Admin.gs ====================
 // פעולות המנהל: רשימות, עץ הפריטים, פריטים לא מוכרים, מחירים, פרויקטים, הגדרות.
 
@@ -1412,6 +1470,7 @@ const ADMIN_ACTIONS = {
   'admin.supplierItems.save': (req, me) => saveSupplierItems_(req.supplierId, req.rows || [], me),
   'admin.order.status': (req, me) => strip_(setOrderStatus_(req.id, req.status, me)),
   'admin.order.pdf': (req) => orderPdf_(req.id),
+  'admin.order.doc': (req) => orderStatusDoc_(req.id, req.kind),
   'admin.project.status': (req, me) => strip_(setProjectStatus_(req.id, req.status, me)),
   'admin.project.closeCheck': (req) => projectCloseCheck_(req.id),
   'admin.container.assign': (req, me) => assignContainer_(req.containerId, req.projectId, req.assign !== false, me),
@@ -1421,7 +1480,7 @@ const ADMIN_ACTIONS = {
 };
 
 // פעולות שמשנות נתונים רצות תחת נעילה, כדי ששני משתמשים לא יכתבו באותו רגע
-const ADMIN_READ_ONLY = ['admin.bootstrap', 'admin.order.pdf', 'admin.project.closeCheck'];
+const ADMIN_READ_ONLY = ['admin.bootstrap', 'admin.order.pdf', 'admin.order.doc', 'admin.project.closeCheck'];
 
 function route_(req) {
   const action = String(req.action || '');

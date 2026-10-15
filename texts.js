@@ -306,6 +306,8 @@ window.T = {
     linesRemoved: 'נמחקו {n} פריטים',
     beforeVat: 'סה"כ לפני מע"מ', afterVat: 'סה"כ כולל מע"מ', vatLine: 'מע"מ {n}%',
     supplierDoc: 'מסמך הזמנה לספק',
+    docPending: 'יתרה לאספקה (מה עוד חסר)',
+    docReceived: 'מה התקבל',
     missingPriceConfirm: 'בחלק מהשורות אין מחיר. לסמן כנשלחה בכל זאת?',
     // כרטיס ספק
     supplierCard: 'כרטיס ספק',
