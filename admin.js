@@ -2,6 +2,8 @@
 
 (() => {
   const TA = T.admin;
+  // לוגו החברה למסמכים (באותה תיקייה כמו admin.js)
+  const LOGO = new URL('logo.jpg', (document.currentScript && document.currentScript.src) || location.href).href;
   const STOCK_TYPES = ['hub', 'container', 'cart'];
   const SITE_TYPES = ['container', 'cart']; // מכולה / עגלה – משויכות לפרויקטים
 
@@ -1189,6 +1191,7 @@
       '<div class="btns noprint" style="margin-bottom:12px">' + reportControls() +
       '<span style="flex:1"></span><button class="btn" data-a="exportCsv">' + esc(TA.downloadExcel) + '</button><button class="btn" data-a="printReport">' + esc(TA.printPdf) + '</button></div>' +
       (A.report === 'countSheet' ? '<div class="hint noprint" style="margin-bottom:10px">' + esc(TA.countHint) + '</div>' : '') +
+      '<img class="printonly" src="' + LOGO + '" alt="" style="height:60px;margin-bottom:6px">' +
       '<h2 class="printonly">' + esc(d.title || TA.reportNames[A.report]) + '</h2>' +
       (d.title ? '<h2 class="noprint" style="margin-top:0">' + esc(d.title) + '</h2>' : '') +
       (d.rows.length ? '<div class="box" style="padding:0;overflow:auto"><table class="' + (d.sheet ? 'countsheet' : '') + '"><tr>' + d.head.map(h => '<th>' + esc(h) + '</th>').join('') + (d.barCol !== undefined ? '<th style="width:28%"></th>' : '') + '</tr>' +
@@ -2467,9 +2470,14 @@
   function printHtml(html, fileName) {
     const w = window.open('', '_blank');
     if (!w) return toast(TA.error, true);
+    // הלוגו במקום שם החברה בראש המסמך
+    html = html.replace(/<div class="co">[^<]*<\/div>/, '<img src="' + LOGO + '" alt="" style="height:70px;display:block">');
     w.document.write(html.replace('<head>', '<head><title>' + esc(String(fileName || '').replace(/\.pdf$/, '')) + '</title>'));
     w.document.close();
-    setTimeout(() => w.print(), 300);
+    // מדפיסים אחרי שהלוגו נטען (ולא יותר מ-3 שניות)
+    const t0 = Date.now();
+    const go = () => ([].every.call(w.document.images, i => i.complete) || Date.now() - t0 > 3000 ? w.print() : setTimeout(go, 100));
+    setTimeout(go, 200);
   }
   // מצב הזמנה: יתרה לאספקה / מה התקבל
   H.orderStatusDoc = async el => {
