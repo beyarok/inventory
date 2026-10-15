@@ -360,7 +360,11 @@ window.T = {
     companyTotal: 'סה"כ בחברה',
 
     // ---- הזמנות ----
-    oTabs: { basket: 'סל הזמנה', open: 'הזמנות פתוחות', price: 'חסר מחיר', compare: 'השוואת ספקים', history: 'היסטוריה' },
+    oTabs: { basket: 'סל הזמנה', open: 'הזמנות פתוחות', transit: 'בדרך', price: 'חסר מחיר', compare: 'השוואת ספקים', history: 'היסטוריה' },
+    transitEmpty: 'אין כרגע שום דבר שמחכים לו',
+    transitHint: 'כל מה שהוזמן ועוד לא הגיע. "צפוי" = מתי הספק אמר שזה יגיע – לפיו נקבע איחור (בלי תאריך: {n} ימים מהשליחה). תאריך בשורה מסומנת חל על כל המסומנות.',
+    transitCount: '{n} פריטים בדרך',
+    cMissing: 'חסר', cWaiting: 'מחכים', cExpected: 'צפוי', daysN: '{n} ימים',
     basketEmpty: 'אין כרגע פריטים מתחת למינימום',
     noSupplier: 'בלי ספק קודם',
     cItem: 'פריט', cStock: 'במלאי / מינ׳', cOrderQty: 'כמות להזמין', cPrice: 'מחיר', cLastAt: 'אחרון אצל', cOnOrder: 'בהזמנה',

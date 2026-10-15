@@ -326,7 +326,7 @@
     const now = Date.now();
     const lateMs = (Number(s.lateDays) || 7) * 86400000;
     const belowMin = t.Items.filter(i => !i.archived && isLeaf(i.id) && i.minQty !== null && i.minQty !== '' && warehouseQty(i.id) < i.minQty);
-    const late = t.Orders.filter(o => (o.status === 'sent' || o.status === 'partial') && o.sentAt && now - Date.parse(o.sentAt) > lateMs);
+    const late = t.Orders.filter(o => lateDays(o) > 0);
     const missingPrice = t.Movements.filter(m => m.type === 'purchase' && m.unitPrice === null && !A.ix.reversed[m.id]);
     const unknown = t.UnknownItems.filter(u => u.status === 'open');
     const weekAgo = now - 7 * 86400000;
@@ -749,13 +749,14 @@
     if (A.orderId && A.ix.orders[A.orderId]) return orderView(A.ix.orders[A.orderId]);
     A.orderId = '';
     const dg = digest();
-    const counts = { basket: basketItems().length, open: A.d.tables.Orders.filter(o => ['draft', 'sent', 'partial'].indexOf(o.status) >= 0).length, price: dg.missingPrice.length };
+    const counts = { transit: transitRows().length, basket: basketItems().length, open: A.d.tables.Orders.filter(o => ['draft', 'sent', 'partial'].indexOf(o.status) >= 0).length, price: dg.missingPrice.length };
     let h = '<h1>' + esc(TA.menu.orders) + '</h1><div class="btns" style="margin-bottom:12px"><div class="seg">' +
       Object.keys(TA.oTabs).map(k => '<button class="' + (A.orderTab === k ? 'on' : '') + '" data-a="orderTab" data-v="' + k + '">' + esc(TA.oTabs[k]) +
         (counts[k] ? ' <span class="cnt">' + counts[k] + '</span>' : '') + '</button>').join('') + '</div>' +
       '<button class="btn" data-a="newOrder">' + ICON.plus + esc(TA.newOrder) + '</button></div>';
     if (A.orderTab === 'basket') h += basketView();
     if (A.orderTab === 'open') h += ordersTable(A.d.tables.Orders.filter(o => ['draft', 'sent', 'partial'].indexOf(o.status) >= 0), TA.noOrders);
+    if (A.orderTab === 'transit') h += transitView();
     if (A.orderTab === 'history') h += ordersTable(A.d.tables.Orders.filter(o => ['received', 'closed_partial', 'canceled'].indexOf(o.status) >= 0), TA.historyEmpty);
     if (A.orderTab === 'price') h += missingPriceView(dg.missingPrice);
     if (A.orderTab === 'compare') h += compareView();
@@ -812,10 +813,12 @@
     return { before, after: o.pricesIncludeVat ? total : total * (1 + vat) };
   }
   const linesOf = id => A.d.tables.OrderLines.filter(l => l.orderId === id && l.qtyBuy > 0);
+  // איחור: לכל שורה שעוד חסרה – עד התאריך הצפוי, ובלעדיו N ימים מהשליחה (כמו בשרת)
+  const lineDue = (l, o) => (l.expectedAt ? Date.parse(l.expectedAt + 'T23:59:59') : Date.parse(o.sentAt) + (Number(A.d.settings.lateDays) || 7) * DAY);
+  const lineLeft = l => Math.max(0, l.qtyBuy * (l.buyUnitQty || 1) - (A.d.receivedByLine[l.id] || 0));
   function lateDays(o) {
     if (!(o.status === 'sent' || o.status === 'partial') || !o.sentAt) return 0;
-    const days = Math.floor((Date.now() - Date.parse(o.sentAt)) / DAY);
-    return days > (Number(A.d.settings.lateDays) || 7) ? days : 0;
+    return linesOf(o.id).reduce((w, l) => (lineLeft(l) > 0 ? Math.max(w, Math.floor((Date.now() - lineDue(l, o)) / DAY)) : w), 0);
   }
 
   function ordersTable(list, empty) {
@@ -882,8 +885,9 @@
       '<label>' + esc(TA.fIncVat) + '</label>' + (draft ? '<input type="checkbox" id="o_vat"' + (o.pricesIncludeVat ? ' checked' : '') + '>' : '<span>' + (o.pricesIncludeVat ? '✓' : '—') + '</span>') +
       '<label>' + esc(TA.fNote) + '</label>' + (draft ? '<input class="in" id="o_note" value="' + esc(o.note) + '">' : '<span>' + esc(o.note) + '</span>') + '</div></div>';
     const anyDisc = lines.some(l => l.discount);
+    const openO = o.status === 'sent' || o.status === 'partial';
     h += '<div class="box" style="margin-top:12px;padding:0;overflow:auto"><table id="olines"><tr><th>' + esc(TA.cItem) + '</th><th>' + esc(TA.cOrdered) + '</th><th>' + esc(TA.cUnit) + '</th>' +
-      (draft ? '' : '<th>' + esc(TA.cReceived) + '</th>') + (anyDisc ? '<th>' + esc(TA.cList) + '</th><th>' + esc(TA.cDiscount) + '</th>' : '') + '<th>' + esc(anyDisc ? TA.cNet : TA.cUnitPrice) + '</th><th>' + esc(TA.cSum) + '</th>' + (draft ? '<th></th>' : '') + '</tr>' +
+      (draft ? '' : '<th>' + esc(TA.cReceived) + '</th>') + (anyDisc ? '<th>' + esc(TA.cList) + '</th><th>' + esc(TA.cDiscount) + '</th>' : '') + '<th>' + esc(anyDisc ? TA.cNet : TA.cUnitPrice) + '</th><th>' + esc(TA.cSum) + '</th>' + (draft ? '<th></th>' : (openO ? '<th>' + esc(TA.cExpected) + '</th>' : '')) + '</tr>' +
       lines.map(l => {
         const it = item(l.itemId) || {};
         const per = l.buyUnitQty || 1;
@@ -894,7 +898,8 @@
           (draft ? '' : '<td' + (full ? '' : ' style="color:var(--warn)"') + '>' + num(got) + '</td>') +
           (anyDisc ? '<td>' + money(l.listPrice !== null && l.listPrice !== '' ? l.listPrice : l.unitPriceBuy) + '</td><td>' + (l.discount ? l.discount + '%' : '') + '</td>' : '') +
           '<td>' + (draft ? '<input class="in" type="number" min="0" step="0.01" style="max-width:110px" data-lp value="' + esc(l.unitPriceBuy) + '">' : money(l.unitPriceBuy)) + '</td>' +
-          '<td>' + money(l.unitPriceBuy === null ? null : l.unitPriceBuy * l.qtyBuy) + '</td>' + (draft ? '<td><button class="btn sm danger" data-a="lineRemove">✕</button></td>' : '') + '</tr>';
+          '<td>' + money(l.unitPriceBuy === null ? null : l.unitPriceBuy * l.qtyBuy) + '</td>' + (draft ? '<td><button class="btn sm danger" data-a="lineRemove">✕</button></td>' : '') +
+          (openO ? '<td>' + (full ? '' : '<input class="in" type="date" data-exp="' + l.id + '" value="' + esc(l.expectedAt || '') + '" style="width:140px">') + '</td>' : '') + '</tr>';
       }).join('') + '</table></div>' +
       '<div class="btns" style="justify-content:space-between;margin:10px 0">' + (draft ? '<button class="btn" data-a="lineAdd">' + ICON.plus + esc(TA.addLine) + '</button>' : '<span></span>') +
       '<b>' + esc(fmt(TA.totals, { before: money(t.before), after: money(t.after) })) + '</b></div>';
@@ -1702,11 +1707,16 @@
   A.plSel = {};
   function selRows(k) {
     if (k === 'ol') { const d = A.drafts[A.orderId]; return d ? d.lines : []; }
+    if (k === 'tw') return transitRows();
     return priceListRows(A.supId);
   }
-  const isSel = (k, r) => (k === 'ol' ? !!r.sel : !!A.plSel[r.itemId]);
-  const setSel = (k, r, v) => { if (k === 'ol') r.sel = v; else if (v) A.plSel[r.itemId] = true; else delete A.plSel[r.itemId]; };
-  const rowKey = (k, r, i) => (k === 'ol' ? String(i) : r.itemId);
+  A.twSel = {};
+  const isSel = (k, r) => (k === 'ol' ? !!r.sel : k === 'tw' ? !!A.twSel[r.id] : !!A.plSel[r.itemId]);
+  const setSel = (k, r, v) => {
+    if (k === 'ol') r.sel = v;
+    else { const m = k === 'tw' ? A.twSel : A.plSel; const key = k === 'tw' ? r.id : r.itemId; if (v) m[key] = true; else delete m[key]; }
+  };
+  const rowKey = (k, r, i) => (k === 'ol' ? String(i) : k === 'tw' ? r.id : r.itemId);
   const nSel = k => selRows(k).filter(r => isSel(k, r)).length;
   function selBar(k) {
     const n = nSel(k);
@@ -1915,6 +1925,72 @@
     scheduleDraftSave(A.orderId);
     render();
   };
+
+  // ---- "בדרך": כל מה שמחכים לו מכל הספקים ----
+  function transitRows() {
+    const out = [];
+    A.d.tables.Orders.filter(o => o.status === 'sent' || o.status === 'partial').forEach(o => {
+      linesOf(o.id).forEach(l => { if (lineLeft(l) > 0) out.push(l); });
+    });
+    return out.sort((a, b) => {
+      const oa = A.ix.orders[a.orderId];
+      const ob = A.ix.orders[b.orderId];
+      return ((A.ix.sups[oa.supplierId] || {}).name || '').localeCompare((A.ix.sups[ob.supplierId] || {}).name || '', 'he') || oa.number - ob.number || displayName(a.itemId).localeCompare(displayName(b.itemId), 'he', { numeric: true });
+    });
+  }
+  function transitView() {
+    const rows = transitRows();
+    if (!rows.length) return '<div class="box muted">' + esc(TA.transitEmpty) + '</div>';
+    const bySup = {};
+    rows.forEach(l => { const s = A.ix.orders[l.orderId].supplierId; (bySup[s] = bySup[s] || []).push(l); });
+    return selBar('tw') + '<div class="hint" style="margin-bottom:8px">' + esc(fmt(TA.transitHint, { n: A.d.settings.lateDays || 7 })) + '</div>' +
+      Object.keys(bySup).map(sid => '<div class="box" style="padding:0;overflow:auto;margin-bottom:12px"><div style="padding:10px 12px"><b>' + esc((A.ix.sups[sid] || {}).name || '') + '</b> <span class="muted small">· ' + esc(fmt(TA.transitCount, { n: bySup[sid].length })) + '</span></div>' +
+        '<table><tr><th>' + allBoxOf('tw', bySup[sid]) + '</th><th>' + esc(TA.cNumber) + '</th><th>' + esc(TA.cItem) + '</th><th>' + esc(TA.cOrdered) + '</th><th>' + esc(TA.cReceived) + '</th><th>' + esc(TA.cMissing) + '</th><th>' + esc(TA.cSent) + '</th><th>' + esc(TA.cWaiting) + '</th><th>' + esc(TA.cExpected) + '</th></tr>' +
+        bySup[sid].map(l => {
+          const o = A.ix.orders[l.orderId];
+          const per = l.buyUnitQty || 1;
+          const it = item(l.itemId) || {};
+          const unit = per > 1 ? it.buyUnitName : unitLabel(l.itemId);
+          const waited = Math.floor((Date.now() - Date.parse(o.sentAt)) / DAY);
+          const late = Math.floor((Date.now() - lineDue(l, o)) / DAY);
+          return '<tr class="' + (A.twSel[l.id] ? 'sel' : '') + '"><td>' + rowBox('tw', l, 0) + '</td><td><button class="link" data-a="openOrder" data-id="' + o.id + '">' + o.number + '</button></td>' +
+            '<td>' + esc(displayName(l.itemId)) + '</td><td>' + num(l.qtyBuy) + ' <span class="muted small">' + esc(unit || '') + '</span></td>' +
+            '<td>' + num(Math.round((A.d.receivedByLine[l.id] || 0) / per * 100) / 100) + '</td><td><b>' + num(Math.round(lineLeft(l) / per * 100) / 100) + '</b></td>' +
+            '<td class="small">' + shortDate(o.sentAt) + '</td><td class="small">' + esc(fmt(TA.daysN, { n: waited })) +
+            (late > 0 ? ' <span class="tag" style="background:var(--danger-bg);color:var(--danger)">' + esc(fmt(TA.late, { n: late })) + '</span>' : '') + '</td>' +
+            '<td><input class="in" type="date" data-exp="' + l.id + '" value="' + esc(l.expectedAt || '') + '" style="width:140px"></td></tr>';
+        }).join('') + '</table></div>').join('');
+  }
+  function allBoxOf(k, rows) {
+    return '<input type="checkbox" class="rowcheck" data-allsub="' + k + '" data-ids="' + rows.map(r => r.id).join(',') + '"' + (rows.length && rows.every(r => isSel(k, r)) ? ' checked' : '') + '>';
+  }
+  document.addEventListener('click', e => {
+    const t = e.target;
+    if (!t.matches || !t.matches('input[data-allsub]')) return;
+    const ids = t.dataset.ids.split(',');
+    selRows(t.dataset.allsub).filter(r => ids.indexOf(r.id) >= 0).forEach(r => setSel(t.dataset.allsub, r, t.checked));
+    render();
+  });
+  // תאריך צפוי: בשורה מסומנת – לכל המסומנות
+  function setExpected(lineIds, date) {
+    return optimistic('admin.order.expected', { lineIds, date }, d => {
+      d.tables.OrderLines.forEach(l => { if (lineIds.indexOf(l.id) >= 0) l.expectedAt = date; });
+    });
+  }
+  document.addEventListener('change', e => {
+    const t = e.target;
+    if (!t.matches || !t.matches('input[data-exp]')) return;
+    const row = A.d.tables.OrderLines.find(l => l.id === t.dataset.exp);
+    if (!row) return;
+    const list = A.orderTab === 'transit' && !A.orderId ? targetsOf('tw', transitRows().find(r => r.id === row.id) || row) : [row];
+    const old = {};
+    list.forEach(l => { (old[l.expectedAt || ''] = old[l.expectedAt || ''] || []).push(l.id); });
+    setExpected(list.map(l => l.id), t.value);
+    if (list.length > 1) {
+      undoToast(fmt(TA.appliedTo, { what: TA.cExpected + ' ' + (t.value ? shortDate(t.value) : '—'), n: list.length }),
+        () => Object.keys(old).forEach(dt => setExpected(old[dt], dt)));
+    }
+  });
 
   // ---- כרטיס ספק ----
   A.supId = '';

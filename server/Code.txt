@@ -33,7 +33,8 @@ const SCHEMA = {
   Orders: ['id', 'number:n', 'supplierId', 'destId', 'status', 'pricesIncludeVat:b', 'vatRate:n',
     'createdBy', 'createdAt', 'sentAt', 'closedAt', 'note', 'extraDiscount:n'],
   // unitPriceBuy = נטו (מחירון פחות הנחה). listPrice/discount – מה שסגרו בהזמנה הזו. saveToList – לעדכן את מחירון הספק בשליחה
-  OrderLines: ['id', 'orderId', 'itemId', 'qtyBuy:n', 'buyUnitQty:n', 'unitPriceBuy:n', 'listPrice:n', 'discount:n', 'saveToList:b'],
+  // expectedAt – מתי הספק אמר שהיתרה תגיע (YYYY-MM-DD). לפיו נקבע איחור; בלעדיו – ימים מהשליחה
+  OrderLines: ['id', 'orderId', 'itemId', 'qtyBuy:n', 'buyUnitQty:n', 'unitPriceBuy:n', 'listPrice:n', 'discount:n', 'saveToList:b', 'expectedAt'],
   Prices: ['id', 'itemId', 'supplierId', 'at', 'unitPrice:n', 'source', 'refId', 'listPrice:n', 'discount:n', 'qty:n'],
   Settings: ['key', 'value'],
   Log: ['at', 'byPersonId', 'action', 'entity', 'entityId', 'summary', 'before', 'after'],
@@ -1021,7 +1022,7 @@ function orderStatusDoc_(id, kind) {
     const dels = (deliveries[l.id] || []).sort((a, b) => (a.at < b.at ? -1 : 1)).map(x => d(x.at) + ': ' + fmtN(x.qty / per)).join('<br>');
     rows.push('<tr><td>' + (rows.length + 1) + '</td><td class="c">' + esc(code) + '</td><td>' + esc(it.name) + '</td><td>' + esc(unitName === 'יחידה' ? '' : unitName) + '</td>' +
       '<td>' + fmtN(l.qtyBuy) + '</td><td>' + fmtN(got) + '</td>' +
-      (pending ? '<td><b>' + fmtN(left) + '</b></td>' : '<td class="c">' + dels + '</td>') + '</tr>');
+      (pending ? '<td><b>' + fmtN(left) + '</b></td><td>' + esc(d(l.expectedAt)) + '</td>' : '<td class="c">' + dels + '</td>') + '</tr>');
   });
   const title = (pending ? 'יתרה לאספקה' : 'מה התקבל') + ' · הזמנה ' + order.number;
   const details = String(Db.setting('companyDetails') || '');
@@ -1041,10 +1042,40 @@ function orderStatusDoc_(id, kind) {
     '<br><b>לאספקה ל:</b> ' + esc(dest.name) + (dest.address ? ' · ' + esc(dest.address) : '') +
     (pending ? '<br>להלן הפריטים מההזמנה שעדיין לא סופקו. נבקש לעדכן מתי צפויה האספקה.' : '') + '</div>' +
     (rows.length
-      ? '<table><tr><th>#</th><th>קוד ספק</th><th>תיאור</th><th>יחידה</th><th>הוזמן</th><th>התקבל</th>' + (pending ? '<th>חסר</th>' : '<th>משלוחים</th>') + '</tr>' + rows.join('') + '</table>'
+      ? '<table><tr><th>#</th><th>קוד ספק</th><th>תיאור</th><th>יחידה</th><th>הוזמן</th><th>התקבל</th>' + (pending ? '<th>חסר</th><th>צפוי</th>' : '<th>משלוחים</th>') + '</tr>' + rows.join('') + '</table>'
       : '<div class="box">' + (pending ? 'כל ההזמנה התקבלה – אין יתרה.' : 'עוד לא התקבל כלום מההזמנה הזו.') + '</div>') +
     '<div class="f">הופק ב-' + Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'dd.MM.yyyy HH:mm') + '</div></body></html>';
   return { fileName: title + ' - ' + (supplier.name || '') + '.pdf', html };
+}
+
+// איחור: לכל שורה שעוד חסרה – עד התאריך הצפוי (אם הספק נתן), אחרת N ימים מהשליחה. מחזיר כמה ימים באיחור (0 = לא).
+function orderLateDays_(order, received, now) {
+  if (!(order.status === 'sent' || order.status === 'partial') || !order.sentAt) return 0;
+  const lateDays = Number(Db.setting('lateDays')) || 7;
+  let worst = 0;
+  orderLines_(order.id).forEach(l => {
+    if ((received[l.id] || 0) >= l.qtyBuy * (l.buyUnitQty || 1)) return;
+    const due = l.expectedAt ? Date.parse(l.expectedAt + 'T23:59:59') : Date.parse(order.sentAt) + lateDays * 86400000;
+    const days = Math.floor((now - due) / 86400000);
+    if (days > worst) worst = days;
+  });
+  return worst;
+}
+
+// מנהל רושם מתי אמורה להגיע יתרה (כמה שורות בבת אחת). date ריק = לא ידוע.
+function setLinesExpected_(lineIds, date, actor) {
+  const d = String(date || '').trim();
+  if (d && !/^\d{4}-\d{2}-\d{2}$/.test(d)) userError_(MSG.missing + 'תאריך');
+  const done = [];
+  (lineIds || []).slice(0, 500).forEach(id => {
+    const l = Db.byId('OrderLines', id);
+    const o = l && Db.byId('Orders', l.orderId);
+    if (!o || ['sent', 'partial'].indexOf(o.status) < 0) return;
+    Db.update('OrderLines', id, { expectedAt: d });
+    done.push(id);
+  });
+  if (done.length) log_(actor, 'expected', 'Orders', '', (d ? 'צפוי ' + d.split('-').reverse().join('.') : 'בלי תאריך צפוי') + ' · ' + done.length + ' שורות');
+  return { updated: done.length };
 }
 
 // ==================== Admin.gs ====================
@@ -1471,6 +1502,7 @@ const ADMIN_ACTIONS = {
   'admin.order.status': (req, me) => strip_(setOrderStatus_(req.id, req.status, me)),
   'admin.order.pdf': (req) => orderPdf_(req.id),
   'admin.order.doc': (req) => orderStatusDoc_(req.id, req.kind),
+  'admin.order.expected': (req, me) => setLinesExpected_(req.lineIds || [], req.date, me),
   'admin.project.status': (req, me) => strip_(setProjectStatus_(req.id, req.status, me)),
   'admin.project.closeCheck': (req) => projectCloseCheck_(req.id),
   'admin.container.assign': (req, me) => assignContainer_(req.containerId, req.projectId, req.assign !== false, me),
@@ -1603,10 +1635,9 @@ function buildDigest_() {
     .map(it => ({ name: it.name, qty: Model.warehouseQty(it.id), min: it.minQty, unit: unitName(it.id) }))
     .filter(x => x.qty < x.min);
 
-  const late = Db.all('Orders').filter(o => (o.status === 'sent' || o.status === 'partial') && o.sentAt &&
-    now - Date.parse(o.sentAt) > lateMs).map(o => ({
-    number: o.number, supplier: (Db.byId('Suppliers', o.supplierId) || {}).name || '',
-    days: Math.floor((now - Date.parse(o.sentAt)) / 86400000),
+  const received = Model.receivedByLine();
+  const late = Db.all('Orders').map(o => ({ o, days: orderLateDays_(o, received, now) })).filter(x => x.days > 0).map(x => ({
+    number: x.o.number, supplier: (Db.byId('Suppliers', x.o.supplierId) || {}).name || '', days: x.days,
   }));
 
   const reversed = Model.reversedIds_();
