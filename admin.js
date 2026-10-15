@@ -1010,6 +1010,7 @@
       (p.status === 'closed' ? ' <span class="tag">' + esc(TA.closedProjects) + '</span>' : '') + '</h2><div class="btns">' +
       '<button class="btn" data-a="editProject">' + esc(TA.edit) + '</button>' +
       (p.status === 'open' ? '<button class="btn" data-a="closeProject">' + esc(TA.closeProject) + '</button>' : '<button class="btn" data-a="reopenProject">' + esc(TA.reopen) + '</button>') +
+      '<button class="btn danger" data-a="removeProject">' + esc(TA.remove) + '</button>' +
       '</div></div>' + (p.note ? '<div class="muted" style="margin-top:6px">' + esc(p.note) + '</div>' : '') +
       '<div class="inline" style="margin-top:12px"><span class="muted">' + esc(TA.containers) + ':</span>' +
       (assigned.length ? assigned.map(c => '<span class="tag g">' + esc((A.ix.locs[c.containerId] || {}).name) +
@@ -2558,6 +2559,21 @@
     });
   };
   H.reopenProject = () => setProjectStatus(A.projectId, 'open');
+  // הסרה – רק לפרויקט שנפתח בטעות (בלי דיווחים). אחרת – סוגרים.
+  H.removeProject = async () => {
+    const p = A.ix.projects[A.projectId];
+    if (!p || waitTmp(p.id)) return;
+    if (A.d.tables.Movements.some(m => m.projectId === p.id && !m.reversesId && !A.ix.reversed[m.id])) {
+      return toast(fmt(TA.projectHasMoves, { name: p.name }), true);
+    }
+    if (!(await confirmBox(fmt(TA.confirmArchive, { name: p.name }), TA.remove, true))) return;
+    optimistic('admin.archive', { entity: 'Projects', id: p.id }, d => {
+      d.tables.Projects.find(x => x.id === p.id).archived = true;
+      d.tables.ContainerProjects.forEach(c => { if (c.projectId === p.id && !c.to) c.to = new Date().toISOString(); });
+    });
+    A.projectId = '';
+    toast(fmt(TA.archived, { name: p.name }));
+  };
 
   // ---- דוחות ----
   H.report = el => { A.report = el.dataset.v; render(); };

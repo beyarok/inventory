@@ -95,6 +95,7 @@ const MSG = {
   personHasTools: 'על {name} רשומים {n} כלים. צריך להחזיר או להעביר אותם קודם.',
   folderHasStock: 'בתיקייה הזו יש פריטים עם מלאי. קודם צריך להעביר אותם או לאפס את המלאי.',
   locationHasStock: 'ב{name} יש עדיין מלאי. קודם צריך להעביר אותו.',
+  projectHasMoves: 'על {name} כבר נרשמו דיווחים, אז אפשר רק לסגור אותו (אם הדיווחים נרשמו בטעות – קודם לבטל אותם בארכיון › כל התנועות).',
   lastAdmin: 'אי אפשר להסיר את המנהל האחרון. קודם צריך להוסיף מנהל אחר.',
   undoExpired: 'עבר הזמן לביטול. אפשר לתקן עם פעולה הפוכה, או לבקש מהמנהל.',
   conflict: 'מישהו אחר שינה את זה בינתיים. רענן ונסה שוב.',
@@ -1273,17 +1274,24 @@ function archive_(entity, id, actor) {
     if (rec.role === 'admin' && adminCount_() <= 1) userError_(MSG.lastAdmin);
   }
   if (entity === 'Locations' && Model.heldBy('L:' + id).length) userError_(MSG.locationHasStock, { name: rec.name });
+  if (entity === 'Projects' && projectHasMoves_(id)) userError_(MSG.projectHasMoves, { name: rec.name });
   if (entity === 'Units' && Db.all('Items').some(it => it.unitId === id)) userError_('היחידה בשימוש בפריטים. קודם צריך לשנות להם יחידה.');
   const ids = entity === 'Items' ? Model.descendants(id) : [id];
   if (entity === 'Items' && ids.some(i => holdersOf_(i).length)) userError_(MSG.folderHasStock);
 
   ids.forEach(i => Db.update(entity, i, { archived: true }));
-  if (entity === 'Locations') {
-    Db.all('ContainerProjects').filter(c => c.containerId === id && !c.to).forEach(c => Db.update('ContainerProjects', c.id, { to: now_() }));
+  if (entity === 'Locations' || entity === 'Projects') {
+    Db.all('ContainerProjects').filter(c => (entity === 'Locations' ? c.containerId : c.projectId) === id && !c.to).forEach(c => Db.update('ContainerProjects', c.id, { to: now_() }));
   }
   log_(actor, 'archive', entity, id, ENTITY_NAMES[entity] + ': ' + rec.name);
   Model.reset();
   return { archived: ids };
+}
+
+// דיווחים שנשארו על הפרויקט (בלי מה שבוטל)
+function projectHasMoves_(id) {
+  const reversed = Model.reversedIds_();
+  return Db.all('Movements').some(m => m.projectId === id && !m.reversesId && !reversed[m.id]);
 }
 
 function restore_(entity, id, actor) {

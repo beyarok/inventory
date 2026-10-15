@@ -424,6 +424,15 @@
       (c.n !== undefined && c.n !== 0 ? ' <span class="n">· ' + num(c.n) + '</span>' : '') + '</button>').join('') + '</div>';
   }
 
+  // הרבה פרויקטים: רשימה נגללת (האחרון שבחרתי ראשון) במקום קיר כפתורים
+  function projectListHtml(chips, selected) {
+    const last = store.get('lastProject', '');
+    const other = chips.filter(c => c.h === '_other');
+    const list = chips.filter(c => c.h !== '_other').sort((a, b) => (b.h === last) - (a.h === last) || a.label.localeCompare(b.label, 'he'));
+    return '<div class="plist">' + list.concat(other).map(c => '<button class="prow' + (c.h === selected ? ' on' : '') + (c.h === '_other' ? ' other' : '') +
+      '" data-a="chip" data-field="projectId" data-v="' + esc(c.h) + '">' + esc(c.label) + '</button>').join('') + '</div>';
+  }
+
   VIEWS.finish = v => {
     initFinish(v);
     const s = spec(v);
@@ -454,7 +463,7 @@
           (other ? '<button class="link" data-a="chip" data-field="projectId" data-v="_other" style="padding:4px 0">' + esc(TX.otherProjectLink) + '</button>' : '') + '</div>';
       } else {
         h += '<div class="field"><div class="label">' + esc(TX.project) + '</div>' +
-          chipsHtml('projectId', other ? chips.concat([chip('_other', TX.otherProject)]) : chips, v.projectId) +
+          (chips.length > 4 ? projectListHtml : (c, sel) => chipsHtml('projectId', c, sel))(other ? chips.concat([chip('_other', TX.otherProject)]) : chips, v.projectId) +
           (v.projectId === '_other' ? '<input id="projNote" class="text" maxlength="120" style="margin-top:8px" placeholder="' + esc(TX.otherProjectQ) + '" value="' + esc(v.projectNote || '') + '">' : '') + '</div>';
       }
     }
@@ -799,7 +808,12 @@
     v[el.dataset.field] = el.dataset.v;
     if (el.dataset.field === 'from') autoProject(v);
     v.err = '';
+    // רשימת פרויקטים נגללת – שומרים על מקום הגלילה
+    const box = el.closest('.plist');
+    const st = box ? box.scrollTop : 0;
     render();
+    const nb = box && document.querySelector('.plist');
+    if (nb) nb.scrollTop = st;
   };
   H.unitMode = el => {
     const v = cur();

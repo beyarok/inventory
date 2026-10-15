@@ -117,6 +117,12 @@ input { font: inherit; }
 .chip .n { color: var(--muted); font-size: 13px; }
 .chip.on { background: var(--green); border-color: var(--green); color: #fff; }
 .chip.on .n { color: #E6F1D8; }
+.plist { max-height: 264px; overflow-y: auto; border: 1px solid var(--line); border-radius: 14px; background: #fff; -webkit-overflow-scrolling: touch; }
+.prow { display: block; width: 100%; text-align: right; padding: 13px 14px; font-size: 16px; background: none; border: 0; border-bottom: 1px solid var(--line); }
+.prow:last-child { border-bottom: 0; }
+.prow.on { background: var(--green); color: #fff; font-weight: bold; }
+.prow.other { color: var(--muted); }
+.prow.other.on { color: #fff; }
 .stepper { display: flex; align-items: center; justify-content: center; gap: 14px; }
 .stepper button {
   width: 52px; height: 52px; border-radius: 14px; border: 1px solid var(--line); font-size: 26px; background: var(--beige);
