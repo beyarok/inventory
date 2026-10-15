@@ -503,7 +503,8 @@
     return top(TX.receiveTitle, true) + '<main class="body"><div class="list">' +
       (orders.length ? orders.map(o => '<button class="row" data-a="order" data-id="' + o.id + '"><span class="grow"><div class="name">' +
         esc(fmt(TX.orderLine, { number: o.number, supplier: (S.ix.sups[o.supplierId] || {}).name || '', n: S.data.orderLines.filter(l => l.orderId === o.id).length })) +
-        '</div><div class="sub">' + esc(holderName('L:' + o.destId)) + '</div></span>' + ICON.chevron + '</button>').join('')
+        '</div><div class="sub">' + esc(holderName('L:' + o.destId)) + (rcvDraft(o.id) ? ' · <b>' + esc(fmt(TX.rcvHasDraft, { n: Object.keys(rcvDraft(o.id).counted || {}).length })) + '</b>' : '') +
+        '</div></span>' + ICON.chevron + '</button>').join('')
         : '<div class="empty">' + esc(TX.noOpenOrders) + '</div>') +
       '<button class="row" data-a="action" data-action="purchase"><span class="grow"><div class="name">' + esc(TX.noOrder) + '</div></span>' + ICON.chevron + '</button>' +
       '</div></main>';
@@ -519,92 +520,99 @@
     });
   }
 
-  // קבלת סחורה: כל מוצר מסומן בנפרד ונרשם מיד (מתאים לפריקה – מוצר אחרי מוצר)
+  // קבלת סחורה = טיוטת ספירה: מסמנים מוצר אחרי מוצר, רואים את כל מה שנספר ומתקנים,
+  // ושום דבר לא נכנס למלאי עד "שלח קבלה". הטיוטה נשמרת בטלפון (אפשר לצאת ולחזור).
+  const rcvKey = id => 'rcv:' + id;
+  const rcvDraft = id => store.get(rcvKey(id), null);
+  function saveRcv(v) {
+    if (Object.keys(v.counted).length) store.set(rcvKey(v.orderId), { counted: v.counted, to: v.to });
+    else store.set(rcvKey(v.orderId), null);
+  }
+
   VIEWS.receiveOrder = v => {
     const o = S.ix.orders[v.orderId];
-    // כל ההזמנה התקבלה – היא נסגרת לבד ויוצאת מהרשימה
-    if (!o) {
-      if (!v.got) return VIEWS.receive();
-      return top(fmt(TX.orderNo, { number: v.number || '' }), true) + '<main class="body"><div class="center" style="min-height:40vh;gap:12px">' +
-        '<div style="color:#6A9A3A">' + ICON.check.replace('<svg', '<svg style="width:56px;height:56px"') + '</div><b>' + esc(fmt(TX.receivedAll, { number: v.number || '' })) + '</b></div>' +
-        photosHtml(v) + '<button class="send" data-a="recvFinish">' + esc(TX.recvFinish) + '</button></main>';
-    }
+    if (!o) return VIEWS.receive();
     if (!v.init) {
-      v.number = o.number;
       v.init = true;
+      const d = rcvDraft(o.id) || {};
+      v.counted = d.counted || {};
+      v.to = d.to || 'L:' + o.destId;
       v.qtys = {};
-      v.doneKeys = {};
       v.q = '';
-      v.to = 'L:' + o.destId;
     }
     const lines = orderLinesOf(o.id);
-    const done = lines.filter(x => x.remaining <= 0).length;
+    const open = lines.filter(x => x.remaining > 0);
+    // מה שכבר התקבל בינתיים (למשל ממכשיר אחר) – יוצא מהטיוטה
+    Object.keys(v.counted).forEach(id => { if (!open.some(x => x.line.id === id)) delete v.counted[id]; });
+    saveRcv(v);
+    const n = open.filter(x => v.counted[x.line.id] !== undefined).length;
+    const pending = open.length - n;
     return top(fmt(TX.orderLine, { number: o.number, supplier: (S.ix.sups[o.supplierId] || {}).name || '', n: lines.length }), true) +
-      '<main class="body"><div class="recvhead"><div class="recvprog"><b>' + esc(fmt(TX.recvProgress, { done, total: lines.length })) + '</b>' +
-      '<div class="barw"><div class="bar" style="width:' + (lines.length ? Math.round(done / lines.length * 100) : 0) + '%"></div></div></div>' +
+      '<main class="body"><div class="recvhead"><div class="recvprog"><b>' + esc(fmt(TX.rcvProgress, { n, total: open.length })) + '</b>' +
+      '<div class="barw"><div class="bar" style="width:' + (open.length ? Math.round(n / open.length * 100) : 0) + '%"></div></div></div>' +
       '<input id="rq" class="text" type="search" placeholder="' + esc(TX.recvSearch) + '" value="' + esc(v.q) + '" autocomplete="off"></div>' +
+      '<div class="hint">' + esc(TX.rcvDraftHint) + '</div>' +
       '<div class="field"><div class="label">' + esc(TX.arrivedTo) + '</div>' + chipsHtml('to', locChips(STOCK_TYPES), v.to) + '</div>' +
       photosHtml(v) +
-      '<div id="recvList">' + recvListHtml(v, lines) + '</div>' +
+      '<div id="recvList">' + rcvListHtml(v, lines) + '</div>' +
       '<div id="err" class="error"></div>' +
-      (lines.length - done > 1 ? '<button class="link" data-a="recvAll" style="padding:8px 0">' + esc(TX.recvAllRest) + '</button>' : '') +
-      '<button class="send" data-a="recvFinish">' + esc(TX.recvFinish) + '</button></main>';
+      (pending > 1 ? '<button class="link" data-a="rcvAll" style="padding:8px 0">' + esc(TX.rcvAllRest) + '</button>' : '') +
+      '<button class="send" data-a="rcvSend"' + (n ? '' : ' disabled style="opacity:.5"') + '>' + esc(fmt(TX.rcvSend, { n })) + '</button></main>';
   };
 
-  function recvListHtml(v, lines) {
+  function rcvListHtml(v, lines) {
     const words = norm(v.q).split(' ').filter(Boolean);
     const match = x => !words.length || words.every(w => (S.ix.search[x.line.itemId] || norm(displayName(x.line.itemId))).indexOf(w) >= 0);
-    const shown = lines.filter(match);
-    if (!shown.length) return '<div class="empty">' + esc(TX.recvNone) + '</div>';
-    const pending = shown.filter(x => x.remaining > 0);
-    const got = shown.filter(x => x.remaining <= 0);
+    const open = lines.filter(x => x.remaining > 0 && match(x));
+    const todo = open.filter(x => v.counted[x.line.id] === undefined);
+    const done = open.filter(x => v.counted[x.line.id] !== undefined);
+    const before = lines.filter(x => x.remaining <= 0 && match(x));
+    if (!todo.length && !done.length && !before.length) return '<div class="empty">' + esc(TX.recvNone) + '</div>';
     // כמות ברירת מחדל = מה שנשאר (נשמרת, כדי ש-+/− יתחילו ממנה)
     const qtyOf = x => { if (v.qtys[x.line.id] === undefined) v.qtys[x.line.id] = x.remaining; return v.qtys[x.line.id]; };
-    return '<div class="list">' + pending.map(x => {
-      const rec = Math.round(x.line.received / x.per * 100) / 100;
-      return '<div class="recvrow"><div class="name">' + esc(displayName(x.line.itemId)) + '</div>' +
-        '<div class="sub">' + esc(fmt(TX.recvOrdered, { n: num(x.line.qtyBuy) + (x.unit ? ' ' + x.unit : '') })) +
-        (rec > 0 ? ' · ' + esc(fmt(TX.recvLeft, { n: num(x.remaining) })) : '') + '</div>' +
+    const sub = x => esc(fmt(TX.recvOrdered, { n: num(x.line.qtyBuy) + (x.unit ? ' ' + x.unit : '') })) +
+      (x.line.received > 0 ? ' · ' + esc(fmt(TX.recvLeft, { n: num(x.remaining) })) : '');
+    let h = '';
+    if (todo.length) {
+      h += '<div class="label">' + esc(fmt(TX.rcvTodo, { n: todo.length })) + '</div><div class="list">' + todo.map(x =>
+        '<div class="recvrow"><div class="name">' + esc(displayName(x.line.itemId)) + '</div><div class="sub">' + sub(x) + '</div>' +
         '<div class="recvctl"><span class="stepper"><button data-a="lineStep" data-id="' + x.line.id + '" data-d="1">+</button>' +
         '<input data-line="' + x.line.id + '" type="number" inputmode="numeric" min="0" value="' + esc(qtyOf(x)) + '">' +
         '<button data-a="lineStep" data-id="' + x.line.id + '" data-d="-1">−</button></span>' +
-        '<button class="recvbtn" data-a="recvOne" data-id="' + x.line.id + '">' + ICON.check + esc(TX.recvArrived) + '</button></div></div>';
-    }).join('') + got.map(x => '<div class="recvrow done"><span class="grow">' + ICON.check + ' ' + esc(displayName(x.line.itemId)) +
-      ' · ' + esc(fmt(TX.recvGot, { n: num(Math.round(x.line.received / x.per * 100) / 100) })) + '</span>' +
-      (v.doneKeys[x.line.id] ? '<button class="mini" data-a="recvUndo" data-id="' + x.line.id + '">' + esc(TX.undo) + '</button>' : '') + '</div>').join('') + '</div>';
+        '<button class="recvbtn" data-a="rcvCount" data-id="' + x.line.id + '">' + ICON.check + esc(TX.rcvCounted) + '</button></div></div>').join('') + '</div>';
+    }
+    if (done.length) {
+      h += '<div class="label">' + esc(fmt(TX.rcvDone, { n: done.length })) + '</div><div class="list">' + done.map(x => {
+        const q = Number(v.counted[x.line.id]) || 0;
+        return '<div class="recvrow counted' + (q < x.remaining ? ' short' : '') + '"><div class="name">' + ICON.check + ' ' + esc(displayName(x.line.itemId)) + '</div>' +
+          '<div class="sub">' + sub(x) + (q < x.remaining ? ' · <b>' + esc(fmt(TX.rcvShort, { n: num(x.remaining - q) })) + '</b>' : '') + '</div>' +
+          '<div class="recvctl"><span class="stepper"><button data-a="rcvStep" data-id="' + x.line.id + '" data-d="1">+</button>' +
+          '<input data-cline="' + x.line.id + '" type="number" inputmode="numeric" min="0" value="' + esc(v.counted[x.line.id]) + '">' +
+          '<button data-a="rcvStep" data-id="' + x.line.id + '" data-d="-1">−</button></span>' +
+          '<button class="mini" data-a="rcvUncount" data-id="' + x.line.id + '">' + esc(TX.rcvUncount) + '</button></div></div>';
+      }).join('') + '</div>';
+    }
+    if (before.length) {
+      h += '<div class="label">' + esc(fmt(TX.rcvBefore, { n: before.length })) + '</div><div class="list">' + before.map(x =>
+        '<div class="recvrow done"><span class="grow">' + ICON.check + ' ' + esc(displayName(x.line.itemId)) + ' · ' +
+        esc(fmt(TX.recvGot, { n: num(Math.round(x.line.received / x.per * 100) / 100) })) + '</span></div>').join('') + '</div>';
+    }
+    return h;
   }
-  // חיפוש: מעדכנים רק את הרשימה – המקלדת נשארת פתוחה
+  // חיפוש: מעדכנים רק את הרשימה – המקלדת נשארת פתוחה. כמויות נשמרות תוך כדי הקלדה.
   document.addEventListener('input', e => {
     const v = cur();
-    if (e.target.id === 'rq' && v.v === 'receiveOrder') {
+    if (v.v !== 'receiveOrder') return;
+    if (e.target.id === 'rq') {
       v.q = e.target.value;
-      document.getElementById('recvList').innerHTML = recvListHtml(v, orderLinesOf(v.orderId));
-    } else if (e.target.dataset && e.target.dataset.line && v.v === 'receiveOrder') {
+      document.getElementById('recvList').innerHTML = rcvListHtml(v, orderLinesOf(v.orderId));
+    } else if (e.target.dataset && e.target.dataset.line) {
       v.qtys[e.target.dataset.line] = e.target.value;
+    } else if (e.target.dataset && e.target.dataset.cline) {
+      v.counted[e.target.dataset.cline] = e.target.value;
+      saveRcv(v);
     }
   });
-
-  // דיווח קבלה של שורה אחת (או כמה) – נכנס לתור ונשלח ברקע, בלי לצאת מהמסך
-  function recvLines(v, xs) {
-    const o = S.ix.orders[v.orderId];
-    const ms = [];
-    xs.forEach(x => {
-      const q = Number(v.qtys[x.line.id] !== undefined ? v.qtys[x.line.id] : x.remaining) || 0;
-      if (q <= 0) return;
-      const m = { clientKey: uuid(), clientAt: new Date().toISOString(), type: 'receive', orderLineId: x.line.id, itemId: x.line.itemId, qty: Math.round(q * x.per), to: v.to };
-      ms.push(m);
-      (v.doneKeys[x.line.id] = v.doneKeys[x.line.id] || []).push(m.clientKey);
-      delete v.qtys[x.line.id];
-    });
-    if (!ms.length) { document.getElementById('err').textContent = TX.qtyMissing; return; }
-    v.firstKey = v.firstKey || ms[0].clientKey;
-    ms.forEach(m => { S.queue.push(m); applyLocal(m); });
-    store.set('queue', S.queue);
-    store.set('boot', S.data);
-    v.got = (v.got || 0) + ms.length;
-    if (o) render();
-    flush();
-  }
 
   // ---------- הציוד שלי ----------
   function relDate(iso) {
@@ -692,52 +700,58 @@
   // ---------- פעולות ----------
   const H = {};
 
-  // ---- קבלת סחורה ----
-  H.recvOne = el => {
+  // ---- קבלת סחורה (טיוטת ספירה) ----
+  H.rcvCount = el => {
     const v = cur();
     readInputs(v);
     const x = orderLinesOf(v.orderId).find(y => y.line.id === el.dataset.id);
-    if (x) recvLines(v, [x]);
+    if (!x) return;
+    v.counted[x.line.id] = v.qtys[x.line.id] !== undefined ? v.qtys[x.line.id] : x.remaining;
+    saveRcv(v);
+    render();
   };
-  H.recvAll = async () => {
+  H.rcvStep = el => {
     const v = cur();
     readInputs(v);
-    const left = orderLinesOf(v.orderId).filter(x => x.remaining > 0);
-    if (!left.length) return;
-    if (!(await confirmBox(fmt(TX.recvAllConfirm, { n: left.length }), TX.recvAllRest))) return;
-    recvLines(v, left);
-  };
-  // ביטול קבלה של שורה: מהתור (אם עוד לא נשלחה) או בשרת
-  H.recvUndo = async el => {
-    const v = cur();
-    const keys = v.doneKeys[el.dataset.id] || [];
-    delete v.doneKeys[el.dataset.id];
-    const queued = keys.filter(k => S.queue.some(m => m.clientKey === k));
-    S.queue = S.queue.filter(m => queued.indexOf(m.clientKey) < 0);
-    store.set('queue', S.queue);
-    rebuildLocal();
+    v.counted[el.dataset.id] = Math.max(0, (Number(v.counted[el.dataset.id]) || 0) + Number(el.dataset.d));
+    saveRcv(v);
     render();
-    try {
-      for (const k of keys) {
-        if (queued.indexOf(k) >= 0 || !S.sentIds[k]) continue;
-        const r = await api('field.undo', { movementId: S.sentIds[k] });
-        if (!r.ok) return toast('err', r.error || TX.generic);
-      }
-      if (keys.length > queued.length) refresh();
-    } catch (e) {
-      toast('err', TX.generic);
-    }
   };
-  H.recvFinish = () => {
+  H.rcvUncount = el => {
     const v = cur();
+    readInputs(v);
+    delete v.counted[el.dataset.id];
+    saveRcv(v);
+    render();
+  };
+  H.rcvAll = async () => {
+    const v = cur();
+    readInputs(v);
+    const left = orderLinesOf(v.orderId).filter(x => x.remaining > 0 && v.counted[x.line.id] === undefined);
+    if (!left.length) return;
+    if (!(await confirmBox(fmt(TX.rcvAllConfirm, { n: left.length }), TX.rcvAllRest))) return;
+    left.forEach(x => { v.counted[x.line.id] = v.qtys[x.line.id] !== undefined ? v.qtys[x.line.id] : x.remaining; });
+    saveRcv(v);
+    render();
+  };
+  // שליחה: עכשיו (ורק עכשיו) הכל נכנס למלאי
+  H.rcvSend = async () => {
+    const v = cur();
+    readInputs(v);
     const o = S.ix.orders[v.orderId];
-    const lines = orderLinesOf(v.orderId);
-    const done = lines.filter(x => x.remaining <= 0).length;
-    const sup = o ? (S.ix.sups[o.supplierId] || {}).name || '' : '';
-    queueDoc(v, v.firstKey || '', v.orderId, TX.docKinds.receive + ' · ' + fmt(TX.orderNo, { number: v.number || '' }) + (sup ? ' · ' + sup : ''));
-    goHome();
-    if (!o || done === lines.length) toast('ok', fmt(TX.receivedAll, { number: v.number || '' }));
-    else if (v.got) toast('ok', fmt(TX.recvSummary, { number: o.number, done, total: lines.length }));
+    const open = orderLinesOf(v.orderId).filter(x => x.remaining > 0);
+    const ms = [];
+    open.forEach(x => {
+      const q = Number(v.counted[x.line.id]) || 0;
+      if (q > 0) ms.push({ clientKey: uuid(), clientAt: new Date().toISOString(), type: 'receive', orderLineId: x.line.id, itemId: x.line.itemId, qty: Math.round(q * x.per), to: v.to });
+    });
+    if (!ms.length) { document.getElementById('err').textContent = TX.qtyMissing; return; }
+    if (!(await confirmBox(fmt(TX.rcvSendConfirm, { n: ms.length, place: holderName(v.to) }), fmt(TX.rcvSend, { n: ms.length })))) return;
+    const missing = open.filter(x => (Number(v.counted[x.line.id]) || 0) < x.remaining).length;
+    queueDoc(v, ms[0].clientKey, o.id, TX.docKinds.receive + ' · ' + fmt(TX.orderNo, { number: o.number }) + ' · ' + ((S.ix.sups[o.supplierId] || {}).name || ''));
+    v.counted = {};
+    saveRcv(v);
+    enqueue(ms, missing ? fmt(TX.receivedSome, { number: o.number, n: missing }) : fmt(TX.receivedAll, { number: o.number }));
   };
   H.back = () => back();
   H.mine = () => go({ v: 'mine', tab: 'pulls' });

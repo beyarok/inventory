@@ -188,3 +188,7 @@ input { font: inherit; }
 .recvbtn svg { width: 20px; height: 20px; }
 .recvrow.done { display: flex; align-items: center; gap: 8px; color: #3F6A1C; background: #EAF2DF; border-radius: 10px; padding: 8px 10px; margin-top: 6px; border-bottom: 0; }
 .recvrow.done svg { width: 16px; height: 16px; vertical-align: middle; }
+.recvrow.counted { background: #F6FAF1; border-radius: 10px; padding: 10px; margin-top: 6px; border-bottom: 0; }
+.recvrow.counted .name svg { width: 16px; height: 16px; color: #6A9A3A; vertical-align: middle; }
+.recvrow.counted.short { background: #FDF6EA; }
+.recvrow.counted.short .sub b { color: #854F0B; }
