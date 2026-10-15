@@ -30,10 +30,10 @@ const SCHEMA = {
   UnknownItems: ['id', 'text', 'movementId', 'byPersonId', 'at', 'status', 'itemId'],
   // extraDiscount – הנחה נוספת על כל ההזמנה (%), אחרי ההנחות בשורות
   Orders: ['id', 'number:n', 'supplierId', 'destId', 'status', 'pricesIncludeVat:b', 'vatRate:n',
-    'createdBy', 'createdAt', 'sentAt', 'closedAt', 'note', 'extraDiscount:n'],
+    'createdBy', 'createdAt', 'sentAt', 'closedAt', 'note', 'extraDiscount:n', 'destIds'],  // destIds – כמה מחסנים (מופרדים בפסיק); destId = הראשון
   // unitPriceBuy = נטו (מחירון פחות הנחה). listPrice/discount – מה שסגרו בהזמנה הזו. saveToList – לעדכן את מחירון הספק בשליחה
   // expectedAt – מתי הספק אמר שהיתרה תגיע (YYYY-MM-DD). לפיו נקבע איחור; בלעדיו – ימים מהשליחה
-  OrderLines: ['id', 'orderId', 'itemId', 'qtyBuy:n', 'buyUnitQty:n', 'unitPriceBuy:n', 'listPrice:n', 'discount:n', 'saveToList:b', 'expectedAt'],
+  OrderLines: ['id', 'orderId', 'itemId', 'qtyBuy:n', 'buyUnitQty:n', 'unitPriceBuy:n', 'listPrice:n', 'discount:n', 'saveToList:b', 'expectedAt', 'destId'],  // destId – לאיזה מחסן השורה (ריק = היעד של ההזמנה)
   Prices: ['id', 'itemId', 'supplierId', 'at', 'unitPrice:n', 'source', 'refId', 'listPrice:n', 'discount:n', 'qty:n'],
   Settings: ['key', 'value'],
   Log: ['at', 'byPersonId', 'action', 'entity', 'entityId', 'summary', 'before', 'after'],
@@ -440,7 +440,7 @@ function recordMovement_(inp, actor, isAdmin) {
     m.itemId = line.itemId;
     m.supplierId = order.supplierId;
     m.from = 'S:' + order.supplierId;
-    m.to = inp.to || 'L:' + order.destId;
+    m.to = inp.to || 'L:' + (line.destId || order.destId);
     m.unitPrice = unitPriceFromLine_(line, order);
   }
 
@@ -588,19 +588,26 @@ function addDoc_(d, actor) {
 // ==================== Orders.gs ====================
 // הזמנות: טיוטה › נשלחה › התקבלה חלקית › התקבלה (או: בוטלה / נסגרה חלקית)
 
-// data: { id?, supplierId, destId, pricesIncludeVat, note, lines: [{ id?, itemId, qtyBuy, listPrice, discount, saveToList | unitPriceBuy }] }
+// data: { id?, supplierId, destId | destIds[], pricesIncludeVat, note, lines: [{ id?, itemId, destId?, qtyBuy, listPrice, discount, saveToList | unitPriceBuy }] }
+// הזמנה לכמה מחסנים: שורה לכל פריט × מחסן. מחיר והנחה זהים, רק הכמות מתחלקת.
 // מחיר: אם יש listPrice – הנטו מחושב ממנו ומההנחה; אחרת unitPriceBuy כמו שהוא (הזמנות ישנות).
 // שורה שהכמות שלה 0 נחשבת מחוקה.
 function saveOrder_(data, actor) {
   const supplier = Db.byId('Suppliers', data.supplierId);
   if (!supplier || supplier.archived) userError_(MSG.missing + 'ספק');
-  const dest = Db.byId('Locations', data.destId);
-  if (!dest || dest.archived || dest.type === 'repair') userError_(MSG.missing + 'יעד');
+  const destIds = (Array.isArray(data.destIds) && data.destIds.length ? data.destIds : [data.destId]).filter(Boolean)
+    .filter((x, i, a) => a.indexOf(x) === i);
+  destIds.forEach(id => {
+    const l = Db.byId('Locations', id);
+    if (!l || l.archived || l.type === 'repair') userError_(MSG.missing + 'יעד');
+  });
+  if (!destIds.length) userError_(MSG.missing + 'יעד');
+  const dest = Db.byId('Locations', destIds[0]);
 
   let order = data.id ? Db.byId('Orders', data.id) : null;
   if (order && order.status !== 'draft') userError_('אפשר לערוך רק הזמנה שעוד לא נשלחה');
   const fields = {
-    supplierId: supplier.id, destId: dest.id, pricesIncludeVat: !!data.pricesIncludeVat,
+    supplierId: supplier.id, destId: dest.id, destIds: destIds.join(','), pricesIncludeVat: !!data.pricesIncludeVat,
     note: String(data.note || '').slice(0, 1000),
   };
   // הנחה נוספת על כל ההזמנה. בהזמנה חדשה – ברירת המחדל היא ההנחה הכללית של הספק
@@ -626,6 +633,8 @@ function saveOrder_(data, actor) {
   (data.lines || []).forEach(l => {
     const qty = Number(l.qtyBuy) || 0;
     const p = linePrice_(l);
+    const lineDest = l.destId && destIds.indexOf(l.destId) >= 0 ? l.destId : dest.id;
+    p.destId = lineDest;
     if (l.id && existing[l.id]) {
       Db.update('OrderLines', l.id, Object.assign({ qtyBuy: qty }, p));
       delete existing[l.id];
@@ -676,10 +685,13 @@ function setOrderStatus_(id, action, actor) {
     const at = now_();
     Db.update('Orders', id, { status: 'sent', sentAt: at });
     // המחירים נכנסים להיסטוריה ברגע השליחה – מכאן נבנית השוואת הספקים
-    Db.insertMany('Prices', lines.filter(l => l.unitPriceBuy !== null).map(l => ({
-      itemId: l.itemId, supplierId: order.supplierId, at, unitPrice: unitPriceFromLine_(l, order),
-      source: 'order', refId: l.id, listPrice: l.listPrice, discount: l.discount, qty: l.qtyBuy,
-    })));
+    const byItem = {};
+    lines.filter(l => l.unitPriceBuy !== null).forEach(l => {
+      if (byItem[l.itemId]) byItem[l.itemId].qty += l.qtyBuy;
+      else byItem[l.itemId] = { itemId: l.itemId, supplierId: order.supplierId, at, unitPrice: unitPriceFromLine_(l, order),
+        source: 'order', refId: l.id, listPrice: l.listPrice, discount: l.discount, qty: l.qtyBuy };
+    });
+    Db.insertMany('Prices', Object.keys(byItem).map(k => byItem[k]));
     // מחירון הספק: מה שסומן "עדכן במחירון", ופריט שעוד לא היה במחירון שלו
     lines.filter(l => l.listPrice !== null).forEach(l => {
       const cur = supplierItem_(order.supplierId, l.itemId);
@@ -735,6 +747,14 @@ function orderPdf_(id) {
   const anyDiscount = lines.some(l => l.discount);
 
   let total = 0;
+  // חלק לכל מחסן (בהזמנה ליעד אחד – חלק אחד)
+  const destOf = l => l.destId || order.destId;
+  const destList = (String(order.destIds || '').split(',').filter(Boolean).length ? String(order.destIds).split(',').filter(Boolean) : [order.destId])
+    .filter(id => lines.some(l => destOf(l) === id));
+  const multi = destList.length > 1;
+  const sectionOf = {};
+  let n = 0;
+  lines.sort((a, b) => destList.indexOf(destOf(a)) - destList.indexOf(destOf(b)));
   const rows = lines.map((l, i) => {
     const it = Model.item(l.itemId) || {};
     const per = l.buyUnitQty || 1;
@@ -743,7 +763,16 @@ function orderPdf_(id) {
     const sum = l.unitPriceBuy === null ? null : l.unitPriceBuy * l.qtyBuy;
     if (sum !== null) total += sum;
     const list = l.listPrice !== null ? l.listPrice : l.unitPriceBuy;
-    return '<tr><td>' + (i + 1) + '</td><td class="c">' + esc(code) + '</td><td>' + esc(it.name) + '</td><td>' + Number(l.qtyBuy).toLocaleString('he-IL') +
+    const dId = destOf(l);
+    let head = '';
+    if (multi && !sectionOf[dId]) {
+      sectionOf[dId] = true;
+      n = 0;
+      const dl = Db.byId('Locations', dId) || {};
+      head = '<tr class="sec"><td colspan="' + (anyDiscount ? 9 : 7) + '">לאספקה ל: ' + esc(dl.name) + (dl.address ? ' · ' + esc(dl.address) : '') + '</td></tr>';
+    }
+    n += 1;
+    return head + '<tr><td>' + n + '</td><td class="c">' + esc(code) + '</td><td>' + esc(it.name) + '</td><td>' + Number(l.qtyBuy).toLocaleString('he-IL') +
       '</td><td>' + esc(unitName === 'יחידה' ? '' : unitName) + '</td>' +
       (anyDiscount ? '<td>' + money(list) + '</td><td>' + (l.discount ? l.discount + '%' : '') + '</td>' : '') +
       '<td>' + money(l.unitPriceBuy) + '</td><td>' + money(sum) + '</td></tr>';
@@ -764,13 +793,15 @@ function orderPdf_(id) {
     '.box{display:flex;gap:30px;margin:14px 0;line-height:1.7}.box b{color:#4A3524}' +
     'table{width:100%;border-collapse:collapse;margin-top:6px}th{background:#4A3524;color:#fff;padding:6px;text-align:right;font-weight:normal}' +
     'td{border-bottom:1px solid #E4DED2;padding:6px}td.c{color:#8A7A68;font-size:11px}' +
+    'tr.sec td{background:#F3EEE7;color:#4A3524;font-weight:bold;padding:8px 6px;border-bottom:2px solid #4A3524}' +
     '.t{margin-top:12px;text-align:left;line-height:1.9}.t b{font-size:14px}.n{margin-top:14px}.f{margin-top:26px;color:#8A7A68;font-size:10px}' +
     '</style></head><body>' +
     '<div class="top"><div><div class="co">' + esc(Db.setting('companyName')) + '</div>' + (details ? '<div class="cd">' + esc(details) + '</div>' : '') + '</div>' +
     '<div><h1>הזמנת רכש מס\' ' + order.number + '</h1><div class="meta">תאריך: ' + esc(date) + '</div></div></div>' +
     '<div class="box"><div><b>לכבוד:</b> ' + esc(supplier.name) +
     (supplier.contact ? '<br>' + esc(supplier.contact) : '') + (supplier.phone ? '<br>טל\' ' + esc(supplier.phone) : '') + (supplier.email ? '<br>' + esc(supplier.email) : '') + '</div>' +
-    '<div><b>לאספקה ל:</b> ' + esc(dest.name) + (dest.address ? '<br>' + esc(dest.address) : '') + '<br><b>הזמין:</b> ' + esc(by.name) + '</div></div>' +
+    '<div>' + (multi ? '<b>לאספקה ל:</b> ' + destList.map(id => esc((Db.byId('Locations', id) || {}).name)).join(', ') + ' (פירוט לכל מחסן בטבלה)'
+      : '<b>לאספקה ל:</b> ' + esc(dest.name) + (dest.address ? '<br>' + esc(dest.address) : '')) + '<br><b>הזמין:</b> ' + esc(by.name) + '</div></div>' +
     '<table><tr><th>#</th><th>קוד ספק</th><th>תיאור</th><th>כמות</th><th>יחידה</th>' + (anyDiscount ? '<th>מחירון</th><th>הנחה</th>' : '') + '<th>מחיר ליח\'</th><th>סה"כ</th></tr>' +
     rows + '</table>' +
     '<div class="t">' + (extra ? 'סה"כ שורות: ' + money(sub) + '<br>הנחה נוספת ' + extra + '%: -' + money(sub - total) + '<br>' : '') +
@@ -828,7 +859,14 @@ function orderStatusDoc_(id, kind) {
   });
   const pending = kind !== 'received';
   const rows = [];
-  orderLines_(id).forEach(l => {
+  const destOf = l => l.destId || order.destId;
+  const all = orderLines_(id);
+  const destList = (String(order.destIds || '').split(',').filter(Boolean).length ? String(order.destIds).split(',').filter(Boolean) : [order.destId])
+    .filter(dId => all.some(l => destOf(l) === dId));
+  const multi = destList.length > 1;
+  const seen = {};
+  let n = 0;
+  all.sort((a, b) => destList.indexOf(destOf(a)) - destList.indexOf(destOf(b))).forEach(l => {
     const it = Model.item(l.itemId) || {};
     const per = l.buyUnitQty || 1;
     const got = (received[l.id] || 0) / per;
@@ -837,7 +875,13 @@ function orderStatusDoc_(id, kind) {
     const unitName = per > 1 ? it.buyUnitName || '' : (Db.byId('Units', Model.inherited(l.itemId, 'unitId')) || {}).name || '';
     const code = (supplierItem_(order.supplierId, l.itemId) || {}).code || '';
     const dels = (deliveries[l.id] || []).sort((a, b) => (a.at < b.at ? -1 : 1)).map(x => d(x.at) + ': ' + fmtN(x.qty / per)).join('<br>');
-    rows.push('<tr><td>' + (rows.length + 1) + '</td><td class="c">' + esc(code) + '</td><td>' + esc(it.name) + '</td><td>' + esc(unitName === 'יחידה' ? '' : unitName) + '</td>' +
+    if (multi && !seen[destOf(l)]) {
+      seen[destOf(l)] = true;
+      n = 0;
+      rows.push('<tr class="sec"><td colspan="' + (pending ? 8 : 7) + '">' + esc((Db.byId('Locations', destOf(l)) || {}).name) + '</td></tr>');
+    }
+    n += 1;
+    rows.push('<tr><td>' + n + '</td><td class="c">' + esc(code) + '</td><td>' + esc(it.name) + '</td><td>' + esc(unitName === 'יחידה' ? '' : unitName) + '</td>' +
       '<td>' + fmtN(l.qtyBuy) + '</td><td>' + fmtN(got) + '</td>' +
       (pending ? '<td><b>' + fmtN(left) + '</b></td><td>' + esc(d(l.expectedAt)) + '</td>' : '<td class="c">' + dels + '</td>') + '</tr>');
   });
@@ -851,12 +895,13 @@ function orderStatusDoc_(id, kind) {
     '.box{margin:14px 0;line-height:1.7}.box b{color:#4A3524}' +
     'table{width:100%;border-collapse:collapse;margin-top:6px}th{background:#4A3524;color:#fff;padding:6px;text-align:right;font-weight:normal}' +
     'td{border-bottom:1px solid #E4DED2;padding:6px;vertical-align:top}td.c{color:#8A7A68;font-size:11px}.f{margin-top:26px;color:#8A7A68;font-size:10px}' +
+    'tr.sec td{background:#F3EEE7;color:#4A3524;font-weight:bold;padding:8px 6px;border-bottom:2px solid #4A3524}' +
     '</style></head><body>' +
     '<div class="top"><div><div class="co">' + esc(Db.setting('companyName')) + '</div>' + (details ? '<div class="cd">' + esc(details) + '</div>' : '') + '</div>' +
     '<div><h1>' + esc(title) + '</h1><div class="meta">תאריך הזמנה: ' + esc(d(order.sentAt || order.createdAt)) + '<br>נכון ל-' +
     Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'dd.MM.yyyy') + '</div></div></div>' +
     '<div class="box"><b>לכבוד:</b> ' + esc(supplier.name) + (supplier.contact ? ' · ' + esc(supplier.contact) : '') + (supplier.phone ? ' · טל\' ' + esc(supplier.phone) : '') +
-    '<br><b>לאספקה ל:</b> ' + esc(dest.name) + (dest.address ? ' · ' + esc(dest.address) : '') +
+    '<br><b>לאספקה ל:</b> ' + (multi ? destList.map(dId => esc((Db.byId('Locations', dId) || {}).name)).join(', ') : esc(dest.name) + (dest.address ? ' · ' + esc(dest.address) : '')) +
     (pending ? '<br>להלן הפריטים מההזמנה שעדיין לא סופקו. נבקש לעדכן מתי צפויה האספקה.' : '') + '</div>' +
     (rows.length
       ? '<table><tr><th>#</th><th>קוד ספק</th><th>תיאור</th><th>יחידה</th><th>הוזמן</th><th>התקבל</th>' + (pending ? '<th>חסר</th><th>צפוי</th>' : '<th>משלוחים</th>') + '</tr>' + rows.join('') + '</table>'
@@ -1391,7 +1436,8 @@ function fieldBootstrap_(me) {
     stock: Model.balances(),
     orders: pick(openOrders, ['id', 'number', 'supplierId', 'destId', 'status']),
     orderLines: Db.all('OrderLines').filter(l => openOrderIds.indexOf(l.orderId) >= 0 && l.qtyBuy > 0)
-      .map(l => ({ id: l.id, orderId: l.orderId, itemId: l.itemId, qtyBuy: l.qtyBuy, buyUnitQty: l.buyUnitQty, received: received[l.id] || 0 })),
+      .map(l => ({ id: l.id, orderId: l.orderId, itemId: l.itemId, qtyBuy: l.qtyBuy, buyUnitQty: l.buyUnitQty, received: received[l.id] || 0,
+        destId: l.destId || (openOrders.find(o => o.id === l.orderId) || {}).destId })),
     personal: fieldPersonal_(me),
     serverTime: now_(),
     ver,

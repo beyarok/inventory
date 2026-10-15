@@ -499,19 +499,28 @@
 
   // ---------- קבלת סחורה ----------
   VIEWS.receive = () => {
-    const orders = S.data.orders.filter(o => S.data.orderLines.some(l => l.orderId === o.id));
+    // הזמנה לכמה מחסנים – שורה לכל מחסן; כל עובד בוחר את המחסן שאליו הסחורה הגיעה
+    const rows = [];
+    S.data.orders.forEach(o => {
+      const dests = [];
+      S.data.orderLines.filter(l => l.orderId === o.id).forEach(l => { const d = l.destId || o.destId; if (dests.indexOf(d) < 0) dests.push(d); });
+      dests.forEach(d => rows.push({ o, d, n: S.data.orderLines.filter(l => l.orderId === o.id && (l.destId || o.destId) === d).length }));
+    });
     return top(TX.receiveTitle, true) + '<main class="body"><div class="list">' +
-      (orders.length ? orders.map(o => '<button class="row" data-a="order" data-id="' + o.id + '"><span class="grow"><div class="name">' +
-        esc(fmt(TX.orderLine, { number: o.number, supplier: (S.ix.sups[o.supplierId] || {}).name || '', n: S.data.orderLines.filter(l => l.orderId === o.id).length })) +
-        '</div><div class="sub">' + esc(holderName('L:' + o.destId)) + (rcvDraft(o.id) ? ' · <b>' + esc(fmt(TX.rcvHasDraft, { n: Object.keys(rcvDraft(o.id).counted || {}).length })) + '</b>' : '') +
-        '</div></span>' + ICON.chevron + '</button>').join('')
-        : '<div class="empty">' + esc(TX.noOpenOrders) + '</div>') +
+      (rows.length ? rows.map(x => {
+        const dr = rcvDraft(x.o.id, x.d);
+        return '<button class="row" data-a="order" data-id="' + x.o.id + '" data-dest="' + x.d + '"><span class="grow"><div class="name">' +
+          esc(fmt(TX.orderLine, { number: x.o.number, supplier: (S.ix.sups[x.o.supplierId] || {}).name || '', n: x.n })) + '</div>' +
+          '<div class="sub">' + esc(fmt(TX.toPlace, { place: holderName('L:' + x.d) })) + (dr ? ' · <b>' + esc(fmt(TX.rcvHasDraft, { n: Object.keys(dr.counted || {}).length })) + '</b>' : '') +
+          '</div></span>' + ICON.chevron + '</button>';
+      }).join('') : '<div class="empty">' + esc(TX.noOpenOrders) + '</div>') +
       '<button class="row" data-a="action" data-action="purchase"><span class="grow"><div class="name">' + esc(TX.noOrder) + '</div></span>' + ICON.chevron + '</button>' +
       '</div></main>';
   };
 
-  function orderLinesOf(orderId) {
-    return S.data.orderLines.filter(l => l.orderId === orderId && item(l.itemId)).map(l => {
+  function orderLinesOf(orderId, destId) {
+    const o = S.ix.orders[orderId] || {};
+    return S.data.orderLines.filter(l => l.orderId === orderId && item(l.itemId) && (!destId || (l.destId || o.destId) === destId)).map(l => {
       const per = l.buyUnitQty || 1;
       const remaining = Math.max(0, Math.round((l.qtyBuy - l.received / per) * 100) / 100);
       const it = item(l.itemId);
@@ -522,11 +531,11 @@
 
   // קבלת סחורה = טיוטת ספירה: מסמנים מוצר אחרי מוצר, רואים את כל מה שנספר ומתקנים,
   // ושום דבר לא נכנס למלאי עד "שלח קבלה". הטיוטה נשמרת בטלפון (אפשר לצאת ולחזור).
-  const rcvKey = id => 'rcv:' + id;
-  const rcvDraft = id => store.get(rcvKey(id), null);
+  const rcvKey = (id, dest) => 'rcv:' + id + (dest ? ':' + dest : '');
+  const rcvDraft = (id, dest) => store.get(rcvKey(id, dest), null);
   function saveRcv(v) {
-    if (Object.keys(v.counted).length) store.set(rcvKey(v.orderId), { counted: v.counted, to: v.to });
-    else store.set(rcvKey(v.orderId), null);
+    if (Object.keys(v.counted).length) store.set(rcvKey(v.orderId, v.destId), { counted: v.counted, to: v.to });
+    else store.set(rcvKey(v.orderId, v.destId), null);
   }
 
   VIEWS.receiveOrder = v => {
@@ -534,13 +543,14 @@
     if (!o) return VIEWS.receive();
     if (!v.init) {
       v.init = true;
-      const d = rcvDraft(o.id) || {};
+      v.destId = v.destId || o.destId;
+      const d = rcvDraft(o.id, v.destId) || {};
       v.counted = d.counted || {};
-      v.to = d.to || 'L:' + o.destId;
+      v.to = d.to || 'L:' + v.destId;
       v.qtys = {};
       v.q = '';
     }
-    const lines = orderLinesOf(o.id);
+    const lines = orderLinesOf(o.id, v.destId);
     const open = lines.filter(x => x.remaining > 0);
     // מה שכבר התקבל בינתיים (למשל ממכשיר אחר) – יוצא מהטיוטה
     Object.keys(v.counted).forEach(id => { if (!open.some(x => x.line.id === id)) delete v.counted[id]; });
@@ -605,7 +615,7 @@
     if (v.v !== 'receiveOrder') return;
     if (e.target.id === 'rq') {
       v.q = e.target.value;
-      document.getElementById('recvList').innerHTML = rcvListHtml(v, orderLinesOf(v.orderId));
+      document.getElementById('recvList').innerHTML = rcvListHtml(v, orderLinesOf(v.orderId, v.destId));
     } else if (e.target.dataset && e.target.dataset.line) {
       v.qtys[e.target.dataset.line] = e.target.value;
     } else if (e.target.dataset && e.target.dataset.cline) {
@@ -704,7 +714,7 @@
   H.rcvCount = el => {
     const v = cur();
     readInputs(v);
-    const x = orderLinesOf(v.orderId).find(y => y.line.id === el.dataset.id);
+    const x = orderLinesOf(v.orderId, v.destId).find(y => y.line.id === el.dataset.id);
     if (!x) return;
     v.counted[x.line.id] = v.qtys[x.line.id] !== undefined ? v.qtys[x.line.id] : x.remaining;
     saveRcv(v);
@@ -727,7 +737,7 @@
   H.rcvAll = async () => {
     const v = cur();
     readInputs(v);
-    const left = orderLinesOf(v.orderId).filter(x => x.remaining > 0 && v.counted[x.line.id] === undefined);
+    const left = orderLinesOf(v.orderId, v.destId).filter(x => x.remaining > 0 && v.counted[x.line.id] === undefined);
     if (!left.length) return;
     if (!(await confirmBox(fmt(TX.rcvAllConfirm, { n: left.length }), TX.rcvAllRest))) return;
     left.forEach(x => { v.counted[x.line.id] = v.qtys[x.line.id] !== undefined ? v.qtys[x.line.id] : x.remaining; });
@@ -739,7 +749,7 @@
     const v = cur();
     readInputs(v);
     const o = S.ix.orders[v.orderId];
-    const open = orderLinesOf(v.orderId).filter(x => x.remaining > 0);
+    const open = orderLinesOf(v.orderId, v.destId).filter(x => x.remaining > 0);
     const ms = [];
     open.forEach(x => {
       const q = Number(v.counted[x.line.id]) || 0;
@@ -751,7 +761,11 @@
     queueDoc(v, ms[0].clientKey, o.id, TX.docKinds.receive + ' · ' + fmt(TX.orderNo, { number: o.number }) + ' · ' + ((S.ix.sups[o.supplierId] || {}).name || ''));
     v.counted = {};
     saveRcv(v);
-    enqueue(ms, missing ? fmt(TX.receivedSome, { number: o.number, n: missing }) : fmt(TX.receivedAll, { number: o.number }));
+    // הזמנה לכמה מחסנים: ההודעה מדברת על החלק של המחסן הזה
+    const otherDests = S.data.orderLines.some(l => l.orderId === o.id && (l.destId || o.destId) !== v.destId);
+    const place = holderName('L:' + v.destId);
+    enqueue(ms, missing ? fmt(otherDests ? TX.receivedSomeDest : TX.receivedSome, { number: o.number, n: missing, place })
+      : fmt(otherDests ? TX.receivedAllDest : TX.receivedAll, { number: o.number, place }));
   };
   H.back = () => back();
   H.mine = () => go({ v: 'mine', tab: 'pulls' });
@@ -777,7 +791,7 @@
     const action = ['purchase', 'count', 'found'].indexOf(cur().action) >= 0 ? cur().action : 'take';
     go({ v: 'finish', action, unknownText: text });
   };
-  H.order = el => go({ v: 'receiveOrder', orderId: el.dataset.id });
+  H.order = el => go({ v: 'receiveOrder', orderId: el.dataset.id, destId: el.dataset.dest || '' });
   H.noteOpen = () => { cur().noteOpen = true; render(); const n = document.getElementById('note'); if (n) n.focus(); };
   H.chip = el => {
     const v = cur();

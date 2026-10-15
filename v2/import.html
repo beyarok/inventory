@@ -60,14 +60,17 @@
     const sups = b.tables.Suppliers.filter(s => !s.archived);
     const sup = sups.find(s => s.name.trim() === data.supplierName) || sups.find(s => s.name.indexOf(data.supplierName) >= 0);
     const locs = b.tables.Locations.filter(l => !l.archived && l.type !== 'repair');
-    const dest = locs.find(l => l.name.indexOf(data.destHint) >= 0);
+    // יעדים: מחסן אחד (destHint) או כמה (dests + כמות לכל מחסן בכל שורה)
+    const dests = data.dests && data.dests.length ? data.dests : [data.destHint];
+    data.lines.forEach(l => { if (!l.qtys) l.qtys = { [dests[0]]: l.qty }; l.qty = dests.reduce((t, d) => t + (Number(l.qtys[d]) || 0), 0); });
     const existing = rootItemsByName(b);
     let total = 0;
     const rows = data.lines.map((l, i) => {
       const n = net(l.list, l.disc);
       total += n * l.qty;
       return '<tr><td>' + (i + 1) + '</td><td>' + esc(l.name) + (l.aliases && l.aliases.length ? '<div class="small muted">כינוי: ' + esc(l.aliases.join(', ')) + '</div>' : '') + '</td><td class="muted small">' + esc(l.code) + '</td><td>' + esc(l.unit) + '</td>' +
-        '<td class="r">' + Number(l.qty).toLocaleString('he-IL') + '</td><td class="r">' + money(l.list) + '</td><td class="r">' + (l.disc ? l.disc + '%' : '') + '</td>' +
+        (dests.length > 1 ? dests.map(d => '<td class="r">' + (Number(l.qtys[d]) || '') + '</td>').join('') : '') +
+        '<td class="r"><b>' + Number(l.qty).toLocaleString('he-IL') + '</b></td><td class="r">' + money(l.list) + '</td><td class="r">' + (l.disc ? l.disc + '%' : '') + '</td>' +
         '<td class="r"><b>' + money(n) + '</b></td><td class="r">' + money(n * l.qty) + '</td>' +
         '<td>' + (existing[l.name] ? '<span class="tag">קיים</span>' : '<span class="tag new">חדש</span>') + '</td></tr>';
     }).join('');
@@ -75,10 +78,14 @@
     const nNew = data.lines.filter(l => !existing[l.name]).length;
     h += '<div class="box" style="margin-bottom:12px"><div class="form" style="max-width:640px">' +
       '<label>ספק</label><select class="in" id="sup">' + sups.map(s => '<option value="' + s.id + '"' + (sup && s.id === sup.id ? ' selected' : '') + '>' + esc(s.name) + '</option>').join('') + '</select>' +
-      '<label>יעד</label><select class="in" id="dest">' + locs.map(l => '<option value="' + l.id + '"' + (dest && l.id === dest.id ? ' selected' : '') + '>' + esc(l.name) + '</option>').join('') + '</select>' +
+      dests.map((hint, k) => {
+        const m = locs.find(l => l.name.indexOf(hint) >= 0);
+        return '<label>' + (dests.length > 1 ? 'מחסן "' + esc(hint) + '"' : 'יעד') + '</label><select class="in" data-dest="' + k + '">' +
+          (m ? '' : '<option value="">– לבחור –</option>') + locs.map(l => '<option value="' + l.id + '"' + (m && l.id === m.id ? ' selected' : '') + '>' + esc(l.name) + '</option>').join('') + '</select>';
+      }).join('') +
       '<label>הנחה נוספת על ההזמנה</label><span>' + (data.extraDiscount || 0) + '%</span>' +
       '<label>הערה להזמנה</label><span>' + esc(data.note) + '</span></div></div>' +
-      '<div class="box" style="padding:0;overflow:auto"><table><tr><th>#</th><th>פריט (שם במערכת)</th><th>קוד ספק</th><th>יחידה</th><th class="r">כמות</th><th class="r">מחירון</th><th class="r">הנחה</th><th class="r">נטו</th><th class="r">סה"כ</th><th></th></tr>' + rows + '</table></div>' +
+      '<div class="box" style="padding:0;overflow:auto"><table><tr><th>#</th><th>פריט (שם במערכת)</th><th>קוד ספק</th><th>יחידה</th>' + (dests.length > 1 ? dests.map(d => '<th class="r">' + esc(d) + '</th>').join('') : '') + '<th class="r">' + (dests.length > 1 ? 'סה"כ' : 'כמות') + '</th><th class="r">מחירון</th><th class="r">הנחה</th><th class="r">נטו</th><th class="r">סה"כ</th><th></th></tr>' + rows + '</table></div>' +
       '<div class="box" style="margin-top:12px;line-height:1.9">' + data.lines.length + ' שורות · ' + nNew + ' פריטים חדשים ייווצרו בעץ הראשי · ' + (data.lines.length - nNew) + ' קיימים<br>' +
       'סה"כ שורות: ' + money(total) + ' · אחרי הנחה נוספת ' + (data.extraDiscount || 0) + '%: <b>' + money(after) + '</b> (לפני מע"מ)</div>' +
       '<div class="btns" style="margin-top:12px"><button class="btn p" id="go">צור פריטים, מחירון והזמנה (טיוטה)</button><button class="btn" id="other">קובץ אחר</button></div>' +
@@ -92,7 +99,10 @@
     const btn = document.getElementById('go');
     btn.disabled = true;
     const supId = document.getElementById('sup').value;
-    const destId = document.getElementById('dest').value;
+    const dests = data.dests && data.dests.length ? data.dests : [data.destHint];
+    const destIds = dests.map((d, k) => document.querySelector('[data-dest="' + k + '"]').value);
+    if (destIds.some(x => !x)) { alert('צריך לבחור מחסן לכל יעד'); btn.disabled = false; return; }
+    if (new Set(destIds).size !== destIds.length) { alert('אותו מחסן נבחר פעמיים'); btn.disabled = false; return; }
     const steps = document.getElementById('steps');
     steps.style.display = 'block';
     const say = t => { steps.insertAdjacentHTML('beforeend', '<div>' + esc(t) + '</div>'); };
@@ -118,8 +128,9 @@
       say('✓ מחירון הספק עודכן (' + rows.length + ' פריטים)');
       // 3. הזמנה בטיוטה
       const r3 = await api({ action: 'admin.order.save', order: {
-        supplierId: supId, destId, pricesIncludeVat: false, note: data.note || '', extraDiscount: data.extraDiscount || 0,
-        lines: data.lines.map(l => ({ itemId: existing[l.name].id, qtyBuy: l.qty, listPrice: l.list, discount: l.disc || 0 })),
+        supplierId: supId, destId: destIds[0], destIds, pricesIncludeVat: false, note: data.note || '', extraDiscount: data.extraDiscount || 0,
+        lines: [].concat.apply([], data.lines.map(l => dests.map((d, k) => ({ itemId: existing[l.name].id, destId: destIds[k], qtyBuy: Number(l.qtys[d]) || 0, listPrice: l.list, discount: l.disc || 0 }))
+          .filter(x => x.qtyBuy > 0))),
       } });
       if (!r3.ok) return fail('יצירת ההזמנה נכשלה: ' + r3.error);
       say('✓ נוצרה הזמנה ' + r3.data.number + ' (טיוטה) – ' + data.lines.length + ' שורות');

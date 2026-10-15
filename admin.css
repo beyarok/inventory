@@ -192,3 +192,7 @@ tr.sel td { background: var(--green-bg); }
 .selbar .grow { flex: 1; font-size: 13px; opacity: .9; }
 .toast.undo { display: flex; gap: 12px; align-items: center; bottom: 70px; }
 .toast.undo button { color: var(--leaf); text-decoration: underline; font-weight: 600; }
+
+.chipbtn { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 5px 12px; font-size: 14px; }
+.chipbtn.on { background: var(--green); border-color: var(--green); color: #fff; }
+tr.dsec td { background: var(--beige); color: var(--brown); }

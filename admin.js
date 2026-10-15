@@ -828,7 +828,7 @@
       '<th>' + esc(TA.cOpened) + '</th><th>' + esc(TA.cSent) + '</th><th>' + esc(TA.cLastReceived) + '</th><th>' + esc(TA.cSum) + '</th></tr>' +
       list.map(o => {
         const late = lateDays(o);
-        return '<tr class="click" data-a="openOrder" data-id="' + o.id + '"><td>' + o.number + '</td><td>' + esc((A.ix.sups[o.supplierId] || {}).name) + '</td><td>' + esc((A.ix.locs[o.destId] || {}).name) +
+        return '<tr class="click" data-a="openOrder" data-id="' + o.id + '"><td>' + o.number + '</td><td>' + esc((A.ix.sups[o.supplierId] || {}).name) + '</td><td>' + esc(orderDests(o).map(id => (A.ix.locs[id] || {}).name || '').join(', ')) +
           '</td><td><span class="tag ' + (o.status === 'received' ? 'g' : '') + '">' + esc(TA.statuses[o.status]) + '</span>' + (late ? ' <span class="tag" style="background:var(--warn-bg);color:var(--warn)">' + esc(fmt(TA.late, { n: late })) + '</span>' : '') +
           '</td><td>' + shortDate(o.createdAt) + '</td><td>' + shortDate(o.sentAt) + '</td><td>' + shortDate((receiptsOf(o.id).slice(-1)[0] || {}).at) + '</td><td>' + money(orderTotals(o, linesOf(o.id)).after) + '</td></tr>';
       }).join('') + '</table></div>';
@@ -881,11 +881,16 @@
         : steps.map((s, i) => '<span class="tag' + (i <= reached ? ' g' : '') + '">' + esc(TA.statuses[s]) + '</span>').join(' › ')) + '</div>';
     h += '<div class="box"><div class="form" style="grid-template-columns:140px 1fr;max-width:560px">' +
       '<label>' + esc(TA.fSupplier) + '</label>' + (draft ? '<select class="in" id="o_sup">' + sups.map(s => '<option value="' + s.id + '"' + (s.id === o.supplierId ? ' selected' : '') + '>' + esc(s.name) + '</option>').join('') + '</select>' : '<span>' + esc((A.ix.sups[o.supplierId] || {}).name) + '</span>') +
-      '<label>' + esc(TA.fDest) + '</label>' + (draft ? '<select class="in" id="o_dest">' + dests.map(l => '<option value="' + l.id + '"' + (l.id === o.destId ? ' selected' : '') + '>' + esc(l.name) + '</option>').join('') + '</select>' : '<span>' + esc((A.ix.locs[o.destId] || {}).name) + '</span>') +
+      '<label>' + esc(TA.fDest) + '</label>' + (draft ? '<select class="in" id="o_dest">' + dests.map(l => '<option value="' + l.id + '"' + (l.id === o.destId ? ' selected' : '') + '>' + esc(l.name) + '</option>').join('') + '</select>' : '<span>' + esc(orderDests(o).map(id => (A.ix.locs[id] || {}).name || '').join(', ')) + '</span>') +
       '<label>' + esc(TA.fIncVat) + '</label>' + (draft ? '<input type="checkbox" id="o_vat"' + (o.pricesIncludeVat ? ' checked' : '') + '>' : '<span>' + (o.pricesIncludeVat ? '✓' : '—') + '</span>') +
       '<label>' + esc(TA.fNote) + '</label>' + (draft ? '<input class="in" id="o_note" value="' + esc(o.note) + '">' : '<span>' + esc(o.note) + '</span>') + '</div></div>';
     const anyDisc = lines.some(l => l.discount);
     const openO = o.status === 'sent' || o.status === 'partial';
+    // כמה מחסנים: כותרת לכל מחסן בתוך הטבלה
+    const dl = orderDests(o).filter(id => lines.some(l => (l.destId || o.destId) === id));
+    const multiD = dl.length > 1;
+    lines.sort((a, b) => dl.indexOf(a.destId || o.destId) - dl.indexOf(b.destId || o.destId));
+    const secSeen = {};
     h += '<div class="box" style="margin-top:12px;padding:0;overflow:auto"><table id="olines"><tr><th>' + esc(TA.cItem) + '</th><th>' + esc(TA.cOrdered) + '</th><th>' + esc(TA.cUnit) + '</th>' +
       (draft ? '' : '<th>' + esc(TA.cReceived) + '</th>') + (anyDisc ? '<th>' + esc(TA.cList) + '</th><th>' + esc(TA.cDiscount) + '</th>' : '') + '<th>' + esc(anyDisc ? TA.cNet : TA.cUnitPrice) + '</th><th>' + esc(TA.cSum) + '</th>' + (draft ? '<th></th>' : (openO ? '<th>' + esc(TA.cExpected) + '</th>' : '')) + '</tr>' +
       lines.map(l => {
@@ -894,7 +899,9 @@
         const unit = per > 1 ? it.buyUnitName : unitLabel(l.itemId);
         const got = (A.d.receivedByLine[l.id] || 0) / per;
         const full = got >= l.qtyBuy;
-        return '<tr data-line="' + l.id + '"><td>' + esc(displayName(l.itemId)) + '</td><td>' + (draft ? '<input class="in" type="number" min="0" style="max-width:90px" data-lq value="' + l.qtyBuy + '">' : num(l.qtyBuy)) + '</td><td>' + esc(unit) + '</td>' +
+        const dId = l.destId || o.destId;
+        const head = multiD && !secSeen[dId] ? (secSeen[dId] = true, '<tr class="dsec"><td colspan="12"><b>' + esc(fmt(TA.toDest, { name: (A.ix.locs[dId] || {}).name || '' })) + '</b></td></tr>') : '';
+        return head + '<tr data-line="' + l.id + '"><td>' + esc(displayName(l.itemId)) + '</td><td>' + (draft ? '<input class="in" type="number" min="0" style="max-width:90px" data-lq value="' + l.qtyBuy + '">' : num(l.qtyBuy)) + '</td><td>' + esc(unit) + '</td>' +
           (draft ? '' : '<td' + (full ? '' : ' style="color:var(--warn)"') + '>' + num(got) + '</td>') +
           (anyDisc ? '<td>' + money(l.listPrice !== null && l.listPrice !== '' ? l.listPrice : l.unitPriceBuy) + '</td><td>' + (l.discount ? l.discount + '%' : '') + '</td>' : '') +
           '<td>' + (draft ? '<input class="in" type="number" min="0" step="0.01" style="max-width:110px" data-lp value="' + esc(l.unitPriceBuy) + '">' : money(l.unitPriceBuy)) + '</td>' +
@@ -1762,25 +1769,46 @@
   }
 
   // ---- הזמנה בטיוטה: נערכת במסך ונשמרת לבד ----
+  // שורה במסך = פריט. אם ההזמנה מתחלקת לכמה מחסנים – עמודת כמות לכל מחסן (מחיר והנחה זהים).
   A.drafts = {};
+  const orderDests = o => {
+    const ids = String(o.destIds || '').split(',').filter(Boolean);
+    return ids.length ? ids : [o.destId];
+  };
   function draftOf(o) {
     let d = A.drafts[o.id];
     if (!d) {
+      const rows = [];
+      A.d.tables.OrderLines.filter(l => l.orderId === o.id && l.qtyBuy > 0).forEach(l => {
+        const dest = l.destId || o.destId;
+        let r = rows.find(x => x.itemId === l.itemId);
+        if (!r) {
+          r = {
+            itemId: l.itemId, qty: {}, ids: {}, sel: false, saveToList: !!l.saveToList, discount: l.discount || 0,
+            listPrice: l.listPrice !== null && l.listPrice !== '' && l.listPrice !== undefined ? l.listPrice : (l.unitPriceBuy === null ? '' : l.unitPriceBuy),
+          };
+          rows.push(r);
+        }
+        r.qty[dest] = l.qtyBuy;
+        r.ids[dest] = l.id;
+      });
       d = A.drafts[o.id] = {
-        supplierId: o.supplierId, destId: o.destId, vat: !!o.pricesIncludeVat, note: o.note || '', extraDiscount: Number(o.extraDiscount) || 0,
-        lines: A.d.tables.OrderLines.filter(l => l.orderId === o.id && l.qtyBuy > 0).map(l => ({
-          id: l.id, itemId: l.itemId, qtyBuy: l.qtyBuy,
-          listPrice: l.listPrice !== null && l.listPrice !== '' && l.listPrice !== undefined ? l.listPrice : (l.unitPriceBuy === null ? '' : l.unitPriceBuy),
-          discount: l.discount || 0, saveToList: !!l.saveToList, sel: false,
-        })),
+        supplierId: o.supplierId, destIds: orderDests(o), vat: !!o.pricesIncludeVat, note: o.note || '', extraDiscount: Number(o.extraDiscount) || 0,
+        lines: rows,
       };
     }
     return d;
   }
-  const draftPayload = (o, d) => ({
-    id: o.id, supplierId: d.supplierId, destId: d.destId, pricesIncludeVat: d.vat, note: d.note, extraDiscount: Number(d.extraDiscount) || 0,
-    lines: d.lines.map(l => ({ id: l.id, itemId: l.itemId, qtyBuy: Number(l.qtyBuy) || 0, listPrice: l.listPrice === '' ? null : Number(l.listPrice), discount: Number(l.discount) || 0, saveToList: !!l.saveToList })),
-  });
+  const rowTotal = r => Object.keys(r.qty).reduce((t, k) => t + (Number(r.qty[k]) || 0), 0);
+  function draftPayload(o, d) {
+    const lines = [];
+    d.lines.forEach(r => d.destIds.forEach(dest => {
+      const q = Number(r.qty[dest]) || 0;
+      if (!q && !r.ids[dest]) return;
+      lines.push({ id: r.ids[dest], itemId: r.itemId, destId: dest, qtyBuy: q, listPrice: r.listPrice === '' ? null : Number(r.listPrice), discount: Number(r.discount) || 0, saveToList: !!r.saveToList });
+    }));
+    return { id: o.id, supplierId: d.supplierId, destId: d.destIds[0], destIds: d.destIds, pricesIncludeVat: d.vat, note: d.note, extraDiscount: Number(d.extraDiscount) || 0, lines };
+  }
   let draftTimer = null;
   let draftSaving = null;
   function scheduleDraftSave(orderId) {
@@ -1797,8 +1825,11 @@
       const r = await mutate('admin.order.save', { order: draftPayload(o, d) }, null);
       // שורות חדשות קיבלו מזהה בשרת – מעדכנים אותן בטיוטה (כדי שלא ייווצרו שוב)
       if (r.ok) {
-        const lines = A.d.tables.OrderLines.filter(l => l.orderId === orderId && l.qtyBuy > 0);
-        d.lines.forEach(l => { if (!l.id) { const s = lines.find(x => x.itemId === l.itemId); if (s) l.id = s.id; } });
+        const lines = A.d.tables.OrderLines.filter(l => l.orderId === orderId);
+        d.lines.forEach(row => d.destIds.forEach(dest => {
+          const s2 = lines.find(x => x.itemId === row.itemId && (x.destId || o.destId) === dest);
+          if (s2) row.ids[dest] = s2.id;
+        }));
       }
       return r;
     })();
@@ -1826,7 +1857,8 @@
     const d = draftOf(o);
     const sup = A.ix.sups[d.supplierId] || {};
     const sups = A.d.tables.Suppliers.filter(s => !s.archived || s.id === d.supplierId);
-    const dests = A.d.tables.Locations.filter(l => (!l.archived || l.id === d.destId) && l.type !== 'repair');
+    const places = A.d.tables.Locations.filter(l => (!l.archived || d.destIds.indexOf(l.id) >= 0) && l.type !== 'repair' && l.type !== 'vehicle');
+    const multi = d.destIds.length > 1;
     const vat = (o.vatRate || Number(A.d.settings.vatRate) || 0) / 100;
     let total = 0;
     const rows = d.lines.map((l, i) => {
@@ -1834,7 +1866,8 @@
       const per = it.buyUnitQty || 1;
       const unit = per > 1 ? it.buyUnitName : unitLabel(l.itemId);
       const n = l.listPrice === '' ? null : netOf(l.listPrice, l.discount);
-      const sum = n === null ? 0 : n * (Number(l.qtyBuy) || 0);
+      const qtyAll = rowTotal(l);
+      const sum = n === null ? 0 : n * qtyAll;
       total += sum;
       const si = supItem(d.supplierId, l.itemId);
       const hasList = si && si.listPrice !== null && si.listPrice !== '';
@@ -1847,9 +1880,11 @@
       const listCell = !hasList ? '<span class="muted small">' + esc(TA.willAddToList) + '</span>'
         : (diffList || diffDisc) ? '<label class="small"><input type="checkbox" data-olsave="' + i + '"' + (l.saveToList ? ' checked' : '') + '> ' + esc(TA.saveToList) + '</label>'
           : '<span class="muted small">' + esc(TA.asInList) + '</span>';
+      const qtyCells = d.destIds.map(dest => '<td style="white-space:nowrap"><input class="in num" type="number" min="0" data-olq="' + dest + '" data-key="' + i + '" value="' + esc(l.qty[dest] || '') + '"' + (multi ? ' placeholder="0"' : '') + '>' +
+        (multi ? '' : ' <span class="muted small">' + esc(unit || '') + '</span>') + '</td>').join('');
       return '<tr class="' + (l.sel ? 'sel' : '') + '"><td>' + rowBox('ol', l, i) + '</td>' +
-        '<td><b>' + esc(displayName(l.itemId)) + '</b><div class="hintline">' + hint + '</div></td>' +
-        '<td style="white-space:nowrap"><input class="in num" type="number" min="0" data-olf="qtyBuy" data-key="' + i + '" value="' + esc(l.qtyBuy) + '"> <span class="muted small">' + esc(unit || '') + '</span></td>' +
+        '<td><b>' + esc(displayName(l.itemId)) + '</b>' + (multi && unit ? ' <span class="muted small">(' + esc(unit) + ')</span>' : '') + '<div class="hintline">' + hint + '</div></td>' +
+        qtyCells + (multi ? '<td><b>' + num(qtyAll) + '</b></td>' : '') +
         '<td><input class="in num' + (diffList ? ' changed' : '') + '" type="number" min="0" step="0.01" data-olf="listPrice" data-key="' + i + '" value="' + esc(l.listPrice) + '"></td>' +
         '<td style="white-space:nowrap"><input class="in pct' + (diffDisc ? ' changed' : '') + '" type="number" min="0" max="100" step="0.5" data-olf="discount" data-key="' + i + '" value="' + esc(l.discount) + '">%</td>' +
         '<td><b>' + (n === null ? '' : money(n)) + '</b></td><td>' + (sum ? money(sum) : '') + '</td><td>' + listCell + '</td>' +
@@ -1860,24 +1895,49 @@
     total = total * (1 - extra / 100);
     const before = d.vat ? total / (1 + vat) : total;
     const after = d.vat ? total : total * (1 + vat);
+    const destName = id => (A.ix.locs[id] || {}).name || '';
+    const nCols = 9 + d.destIds.length + (multi ? 1 : 0);
     return '<button class="link" data-a="orderBack" style="margin-bottom:8px">' + esc(TA.backToList) + '</button>' +
       '<h1>' + esc(fmt(TA.orderTitle, { number: o.number, supplier: sup.name || '' })) + ' <span class="tag">' + esc(TA.statuses.draft) + '</span></h1>' +
       '<div class="box" style="margin-bottom:12px"><div class="btns">' +
       '<label class="muted">' + esc(TA.fSupplier) + '</label><select class="in" data-od="supplierId" style="max-width:220px">' + sups.map(s => '<option value="' + s.id + '"' + (s.id === d.supplierId ? ' selected' : '') + '>' + esc(s.name) + '</option>').join('') + '</select>' +
       '<button class="link" data-a="openSupplier" data-id="' + d.supplierId + '">' + esc(TA.supplierCard) + '</button>' +
-      '<label class="muted">' + esc(TA.fDest) + '</label><select class="in" data-od="destId" style="max-width:180px">' + dests.map(l => '<option value="' + l.id + '"' + (l.id === d.destId ? ' selected' : '') + '>' + esc(l.name) + '</option>').join('') + '</select>' +
       '<label class="small"><input type="checkbox" data-od="vat"' + (d.vat ? ' checked' : '') + '> ' + esc(TA.fIncVat) + '</label>' +
       '<label class="muted">' + esc(TA.fExtraDiscount) + '</label><span style="white-space:nowrap"><input class="in pct" type="number" min="0" max="100" step="0.5" data-od="extraDiscount" value="' + esc(d.extraDiscount) + '">%</span></div>' +
+      // יעדים: לחיצה מוסיפה / מורידה מחסן (עמודה בטבלה)
+      '<div class="btns" style="margin-top:10px"><label class="muted">' + esc(TA.fDests) + '</label>' +
+      places.map(l => '<button class="chipbtn' + (d.destIds.indexOf(l.id) >= 0 ? ' on' : '') + '" data-a="odDest" data-id="' + l.id + '">' + (d.destIds.indexOf(l.id) >= 0 ? '✓ ' : '+ ') + esc(l.name) + '</button>').join('') +
+      '<span class="hint">' + esc(multi ? TA.destsHintMulti : TA.destsHint) + '</span></div>' +
       '<div class="inline" style="margin-top:8px"><input class="in" data-od="note" placeholder="' + esc(TA.fNote) + '" value="' + esc(d.note) + '"></div></div>' +
       selBar('ol') + '<div class="hint" style="margin-bottom:6px">' + esc(TA.draftHint) + '</div>' +
-      '<div class="box" style="padding:0;overflow:auto"><table><tr><th>' + allBox('ol') + '</th><th>' + esc(TA.cItem) + '</th><th>' + esc(TA.cQty) + '</th><th>' + esc(TA.cList) + '</th><th>' + esc(TA.cDiscount) + '</th><th>' + esc(TA.cNet) + '</th><th>' + esc(TA.cSum) + '</th><th></th><th></th></tr>' +
-      (rows || '<tr><td colspan="9" class="muted">' + esc(TA.noLines) + '</td></tr>') + '</table></div>' +
+      '<div class="box" style="padding:0;overflow:auto"><table><tr><th>' + allBox('ol') + '</th><th>' + esc(TA.cItem) + '</th>' +
+      (multi ? d.destIds.map(id => '<th>' + esc(destName(id)) + '</th>').join('') + '<th>' + esc(TA.cTotalQty) + '</th>' : '<th>' + esc(TA.cQty) + '</th>') +
+      '<th>' + esc(TA.cList) + '</th><th>' + esc(TA.cDiscount) + '</th><th>' + esc(TA.cNet) + '</th><th>' + esc(TA.cSum) + '</th><th></th><th></th></tr>' +
+      (rows || '<tr><td colspan="' + nCols + '" class="muted">' + esc(TA.noLines) + '</td></tr>') + '</table></div>' +
       '<div class="btns" style="justify-content:space-between;margin:10px 0"><button class="btn" data-a="olAdd">' + ICON.plus + esc(TA.addLine) + '</button>' +
       '<div style="text-align:left;line-height:1.8">' + (extra ? esc(TA.linesTotal) + ': ' + money(sub) + '<br>' + esc(fmt(TA.extraLine, { n: extra })) + ': -' + money(sub - total) + '<br>' : '') +
       esc(TA.beforeVat) + ': <b>' + money(before) + '</b><br>' + esc(fmt(TA.vatLine, { n: o.vatRate || A.d.settings.vatRate })) + ': ' + money(after - before) + '<br>' + esc(TA.afterVat) + ': <b>' + money(after) + '</b></div></div>' +
       '<div class="btns"><button class="btn p" data-a="orderSend">' + esc(TA.markSent) + '</button><button class="btn" data-a="orderPdf">' + esc(TA.supplierDoc) + '</button>' +
       '<button class="btn danger" data-a="orderCancel">' + esc(TA.cancelOrder) + '</button></div>' + orderDocs(o);
   }
+
+  // יעדים: הוספה / הסרה של מחסן
+  H.odDest = async el => {
+    const d = A.drafts[A.orderId];
+    const id = el.dataset.id;
+    const at = d.destIds.indexOf(id);
+    if (at < 0) {
+      d.destIds.push(id);
+    } else {
+      if (d.destIds.length === 1) return toast(TA.needOneDest, true);
+      const withQty = d.lines.filter(r => Number(r.qty[id]) > 0).length;
+      if (withQty && !(await confirmBox(fmt(TA.removeDestConfirm, { name: (A.ix.locs[id] || {}).name || '', n: withQty }), TA.remove, true))) return;
+      d.destIds.splice(at, 1);
+      d.lines.forEach(r => { delete r.qty[id]; });
+    }
+    scheduleDraftSave(A.orderId);
+    render();
+  };
 
   // שינויים בטיוטה
   document.addEventListener('change', e => {
@@ -1895,10 +1955,14 @@
       } else d[k] = t.value;
       scheduleDraftSave(A.orderId);
       render();
+    } else if (t.dataset.olq) {
+      const dest = t.dataset.olq;
+      const v = t.value;
+      draftEdit('ol', t.dataset.key, r => { r.qty[dest] = v; }, (d.destIds.length > 1 ? (A.ix.locs[dest] || {}).name + ': ' : TA.cQty + ' ') + v);
     } else if (t.dataset.olf) {
       const f = t.dataset.olf;
       const v = t.value;
-      draftEdit('ol', t.dataset.key, r => { r[f] = v; }, { qtyBuy: TA.cQty, listPrice: TA.cList, discount: TA.cDiscount }[f] + ' ' + v + (f === 'discount' ? '%' : ''));
+      draftEdit('ol', t.dataset.key, r => { r[f] = v; }, { listPrice: TA.cList, discount: TA.cDiscount }[f] + ' ' + v + (f === 'discount' ? '%' : ''));
     } else if (t.dataset.olsave !== undefined) {
       const v = t.checked;
       draftEdit('ol', t.dataset.olsave, r => { r.saveToList = v; }, v ? TA.saveToList : TA.notSaveToList);
@@ -1920,8 +1984,10 @@
     const d = A.drafts[A.orderId];
     const id = await pickBox(TA.addLine, true, d.lines.map(l => l.itemId));
     if (!id) return;
-    const ex = d.lines.find(l => l.itemId === id);
-    if (!ex) d.lines.push(Object.assign({ itemId: id, qtyBuy: 1, saveToList: false, sel: false }, prefill(d.supplierId, id)));
+    if (!d.lines.find(l => l.itemId === id)) {
+      // כמות 1 במחסן הראשון – כדי שהשורה תישמר; משנים לכמות האמיתית
+      d.lines.push(Object.assign({ itemId: id, qty: { [d.destIds[0]]: 1 }, ids: {}, saveToList: false, sel: false }, prefill(d.supplierId, id)));
+    }
     scheduleDraftSave(A.orderId);
     render();
   };
@@ -1945,7 +2011,7 @@
     rows.forEach(l => { const s = A.ix.orders[l.orderId].supplierId; (bySup[s] = bySup[s] || []).push(l); });
     return selBar('tw') + '<div class="hint" style="margin-bottom:8px">' + esc(fmt(TA.transitHint, { n: A.d.settings.lateDays || 7 })) + '</div>' +
       Object.keys(bySup).map(sid => '<div class="box" style="padding:0;overflow:auto;margin-bottom:12px"><div style="padding:10px 12px"><b>' + esc((A.ix.sups[sid] || {}).name || '') + '</b> <span class="muted small">· ' + esc(fmt(TA.transitCount, { n: bySup[sid].length })) + '</span></div>' +
-        '<table><tr><th>' + allBoxOf('tw', bySup[sid]) + '</th><th>' + esc(TA.cNumber) + '</th><th>' + esc(TA.cItem) + '</th><th>' + esc(TA.cOrdered) + '</th><th>' + esc(TA.cReceived) + '</th><th>' + esc(TA.cMissing) + '</th><th>' + esc(TA.cSent) + '</th><th>' + esc(TA.cWaiting) + '</th><th>' + esc(TA.cExpected) + '</th></tr>' +
+        '<table><tr><th>' + allBoxOf('tw', bySup[sid]) + '</th><th>' + esc(TA.cNumber) + '</th><th>' + esc(TA.cItem) + '</th><th>' + esc(TA.fDest) + '</th><th>' + esc(TA.cOrdered) + '</th><th>' + esc(TA.cReceived) + '</th><th>' + esc(TA.cMissing) + '</th><th>' + esc(TA.cSent) + '</th><th>' + esc(TA.cWaiting) + '</th><th>' + esc(TA.cExpected) + '</th></tr>' +
         bySup[sid].map(l => {
           const o = A.ix.orders[l.orderId];
           const per = l.buyUnitQty || 1;
@@ -1954,7 +2020,7 @@
           const waited = Math.floor((Date.now() - Date.parse(o.sentAt)) / DAY);
           const late = Math.floor((Date.now() - lineDue(l, o)) / DAY);
           return '<tr class="' + (A.twSel[l.id] ? 'sel' : '') + '"><td>' + rowBox('tw', l, 0) + '</td><td><button class="link" data-a="openOrder" data-id="' + o.id + '">' + o.number + '</button></td>' +
-            '<td>' + esc(displayName(l.itemId)) + '</td><td>' + num(l.qtyBuy) + ' <span class="muted small">' + esc(unit || '') + '</span></td>' +
+            '<td>' + esc(displayName(l.itemId)) + '</td><td class="small">' + esc((A.ix.locs[l.destId || o.destId] || {}).name || '') + '</td><td>' + num(l.qtyBuy) + ' <span class="muted small">' + esc(unit || '') + '</span></td>' +
             '<td>' + num(Math.round((A.d.receivedByLine[l.id] || 0) / per * 100) / 100) + '</td><td><b>' + num(Math.round(lineLeft(l) / per * 100) / 100) + '</b></td>' +
             '<td class="small">' + shortDate(o.sentAt) + '</td><td class="small">' + esc(fmt(TA.daysN, { n: waited })) +
             (late > 0 ? ' <span class="tag" style="background:var(--danger-bg);color:var(--danger)">' + esc(fmt(TA.late, { n: late })) + '</span>' : '') + '</td>' +
@@ -2377,8 +2443,8 @@
   H.orderSend = async () => {
     const o = A.ix.orders[A.orderId];
     const d = A.drafts[o.id];
-    if (d && !d.lines.some(l => Number(l.qtyBuy) > 0)) return toast(TA.noLines, true);
-    if (d && d.lines.some(l => Number(l.qtyBuy) > 0 && l.listPrice === '')) {
+    if (d && !d.lines.some(l => rowTotal(l) > 0)) return toast(TA.noLines, true);
+    if (d && d.lines.some(l => rowTotal(l) > 0 && l.listPrice === '')) {
       if (!(await confirmBox(TA.missingPriceConfirm, TA.markSent))) return;
     }
     const r = await saveDraft(o.id);
