@@ -519,27 +519,92 @@
     });
   }
 
+  // קבלת סחורה: כל מוצר מסומן בנפרד ונרשם מיד (מתאים לפריקה – מוצר אחרי מוצר)
   VIEWS.receiveOrder = v => {
     const o = S.ix.orders[v.orderId];
-    if (!o) return VIEWS.receive();
-    const lines = orderLinesOf(o.id);
+    // כל ההזמנה התקבלה – היא נסגרת לבד ויוצאת מהרשימה
+    if (!o) {
+      if (!v.got) return VIEWS.receive();
+      return top(fmt(TX.orderNo, { number: v.number || '' }), true) + '<main class="body"><div class="center" style="min-height:40vh;gap:12px">' +
+        '<div style="color:#6A9A3A">' + ICON.check.replace('<svg', '<svg style="width:56px;height:56px"') + '</div><b>' + esc(fmt(TX.receivedAll, { number: v.number || '' })) + '</b></div>' +
+        photosHtml(v) + '<button class="send" data-a="recvFinish">' + esc(TX.recvFinish) + '</button></main>';
+    }
     if (!v.init) {
+      v.number = o.number;
       v.init = true;
       v.qtys = {};
-      lines.forEach(x => { v.qtys[x.line.id] = x.remaining; });
+      v.doneKeys = {};
+      v.q = '';
       v.to = 'L:' + o.destId;
     }
+    const lines = orderLinesOf(o.id);
+    const done = lines.filter(x => x.remaining <= 0).length;
     return top(fmt(TX.orderLine, { number: o.number, supplier: (S.ix.sups[o.supplierId] || {}).name || '', n: lines.length }), true) +
-      '<main class="body"><div class="label">' + esc(TX.whatArrived) + '</div><div class="list">' +
-      lines.map(x => '<div class="row"><span class="grow"><div class="name">' + esc(displayName(x.line.itemId)) + '</div>' +
-        '<div class="sub">' + num(x.remaining) + ' ' + esc(x.unit) + '</div></span>' +
-        '<span class="stepper" style="gap:6px"><button data-a="lineStep" data-id="' + x.line.id + '" data-d="1" style="width:40px;height:40px;font-size:20px">+</button>' +
-        '<input data-line="' + x.line.id + '" type="number" inputmode="numeric" min="0" value="' + esc(v.qtys[x.line.id]) + '" style="width:64px;font-size:18px">' +
-        '<button data-a="lineStep" data-id="' + x.line.id + '" data-d="-1" style="width:40px;height:40px;font-size:20px">−</button></span></div>').join('') +
-      '</div><div class="field"><div class="label">' + esc(TX.arrivedTo) + '</div>' + chipsHtml('to', locChips(STOCK_TYPES), v.to) + '</div>' +
+      '<main class="body"><div class="recvhead"><div class="recvprog"><b>' + esc(fmt(TX.recvProgress, { done, total: lines.length })) + '</b>' +
+      '<div class="barw"><div class="bar" style="width:' + (lines.length ? Math.round(done / lines.length * 100) : 0) + '%"></div></div></div>' +
+      '<input id="rq" class="text" type="search" placeholder="' + esc(TX.recvSearch) + '" value="' + esc(v.q) + '" autocomplete="off"></div>' +
+      '<div class="field"><div class="label">' + esc(TX.arrivedTo) + '</div>' + chipsHtml('to', locChips(STOCK_TYPES), v.to) + '</div>' +
       photosHtml(v) +
-      '<div id="err" class="error"></div><button class="send" data-a="receiveGo">' + esc(TX.confirmReceive) + '</button></main>';
+      '<div id="recvList">' + recvListHtml(v, lines) + '</div>' +
+      '<div id="err" class="error"></div>' +
+      (lines.length - done > 1 ? '<button class="link" data-a="recvAll" style="padding:8px 0">' + esc(TX.recvAllRest) + '</button>' : '') +
+      '<button class="send" data-a="recvFinish">' + esc(TX.recvFinish) + '</button></main>';
   };
+
+  function recvListHtml(v, lines) {
+    const words = norm(v.q).split(' ').filter(Boolean);
+    const match = x => !words.length || words.every(w => (S.ix.search[x.line.itemId] || norm(displayName(x.line.itemId))).indexOf(w) >= 0);
+    const shown = lines.filter(match);
+    if (!shown.length) return '<div class="empty">' + esc(TX.recvNone) + '</div>';
+    const pending = shown.filter(x => x.remaining > 0);
+    const got = shown.filter(x => x.remaining <= 0);
+    // כמות ברירת מחדל = מה שנשאר (נשמרת, כדי ש-+/− יתחילו ממנה)
+    const qtyOf = x => { if (v.qtys[x.line.id] === undefined) v.qtys[x.line.id] = x.remaining; return v.qtys[x.line.id]; };
+    return '<div class="list">' + pending.map(x => {
+      const rec = Math.round(x.line.received / x.per * 100) / 100;
+      return '<div class="recvrow"><div class="name">' + esc(displayName(x.line.itemId)) + '</div>' +
+        '<div class="sub">' + esc(fmt(TX.recvOrdered, { n: num(x.line.qtyBuy) + (x.unit ? ' ' + x.unit : '') })) +
+        (rec > 0 ? ' · ' + esc(fmt(TX.recvLeft, { n: num(x.remaining) })) : '') + '</div>' +
+        '<div class="recvctl"><span class="stepper"><button data-a="lineStep" data-id="' + x.line.id + '" data-d="1">+</button>' +
+        '<input data-line="' + x.line.id + '" type="number" inputmode="numeric" min="0" value="' + esc(qtyOf(x)) + '">' +
+        '<button data-a="lineStep" data-id="' + x.line.id + '" data-d="-1">−</button></span>' +
+        '<button class="recvbtn" data-a="recvOne" data-id="' + x.line.id + '">' + ICON.check + esc(TX.recvArrived) + '</button></div></div>';
+    }).join('') + got.map(x => '<div class="recvrow done"><span class="grow">' + ICON.check + ' ' + esc(displayName(x.line.itemId)) +
+      ' · ' + esc(fmt(TX.recvGot, { n: num(Math.round(x.line.received / x.per * 100) / 100) })) + '</span>' +
+      (v.doneKeys[x.line.id] ? '<button class="mini" data-a="recvUndo" data-id="' + x.line.id + '">' + esc(TX.undo) + '</button>' : '') + '</div>').join('') + '</div>';
+  }
+  // חיפוש: מעדכנים רק את הרשימה – המקלדת נשארת פתוחה
+  document.addEventListener('input', e => {
+    const v = cur();
+    if (e.target.id === 'rq' && v.v === 'receiveOrder') {
+      v.q = e.target.value;
+      document.getElementById('recvList').innerHTML = recvListHtml(v, orderLinesOf(v.orderId));
+    } else if (e.target.dataset && e.target.dataset.line && v.v === 'receiveOrder') {
+      v.qtys[e.target.dataset.line] = e.target.value;
+    }
+  });
+
+  // דיווח קבלה של שורה אחת (או כמה) – נכנס לתור ונשלח ברקע, בלי לצאת מהמסך
+  function recvLines(v, xs) {
+    const o = S.ix.orders[v.orderId];
+    const ms = [];
+    xs.forEach(x => {
+      const q = Number(v.qtys[x.line.id] !== undefined ? v.qtys[x.line.id] : x.remaining) || 0;
+      if (q <= 0) return;
+      const m = { clientKey: uuid(), clientAt: new Date().toISOString(), type: 'receive', orderLineId: x.line.id, itemId: x.line.itemId, qty: Math.round(q * x.per), to: v.to };
+      ms.push(m);
+      (v.doneKeys[x.line.id] = v.doneKeys[x.line.id] || []).push(m.clientKey);
+      delete v.qtys[x.line.id];
+    });
+    if (!ms.length) { document.getElementById('err').textContent = TX.qtyMissing; return; }
+    v.firstKey = v.firstKey || ms[0].clientKey;
+    ms.forEach(m => { S.queue.push(m); applyLocal(m); });
+    store.set('queue', S.queue);
+    store.set('boot', S.data);
+    v.got = (v.got || 0) + ms.length;
+    if (o) render();
+    flush();
+  }
 
   // ---------- הציוד שלי ----------
   function relDate(iso) {
@@ -586,6 +651,20 @@
   VIEWS.message = v => top('', false) + '<div class="center">' + esc(v.text) + '</div>';
 
   // ---------- ציור ----------
+  // עדכון שמגיע ברקע (נתונים חדשים, הודעה שנעלמת) לא מצייר מחדש בזמן הקלדה – אחרת המקלדת נסגרת והמסך קופץ.
+  // מחכים שהשדה ייצא מפוקוס.
+  const typing = () => {
+    const a = document.activeElement;
+    return a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA') && a.type !== 'checkbox' && a.type !== 'file' && a.closest('#app');
+  };
+  function softRender() {
+    if (typing()) { S.renderLater = true; return; }
+    render();
+  }
+  document.addEventListener('focusout', () => setTimeout(() => {
+    if (S.renderLater && !typing()) { S.renderLater = false; render(); }
+  }, 60));
+
   function render() {
     const app = document.getElementById('app');
     if (S.fatal) { app.innerHTML = VIEWS.message({ text: S.fatal }); return; }
@@ -606,12 +685,60 @@
   function toast(kind, text, undoKey) {
     S.toast = { kind, text, undoKey };
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { S.toast = null; render(); }, undoKey ? 9000 : 5000);
+    toastTimer = setTimeout(() => { S.toast = null; softRender(); }, undoKey ? 9000 : 5000);
     render();
   }
 
   // ---------- פעולות ----------
   const H = {};
+
+  // ---- קבלת סחורה ----
+  H.recvOne = el => {
+    const v = cur();
+    readInputs(v);
+    const x = orderLinesOf(v.orderId).find(y => y.line.id === el.dataset.id);
+    if (x) recvLines(v, [x]);
+  };
+  H.recvAll = async () => {
+    const v = cur();
+    readInputs(v);
+    const left = orderLinesOf(v.orderId).filter(x => x.remaining > 0);
+    if (!left.length) return;
+    if (!(await confirmBox(fmt(TX.recvAllConfirm, { n: left.length }), TX.recvAllRest))) return;
+    recvLines(v, left);
+  };
+  // ביטול קבלה של שורה: מהתור (אם עוד לא נשלחה) או בשרת
+  H.recvUndo = async el => {
+    const v = cur();
+    const keys = v.doneKeys[el.dataset.id] || [];
+    delete v.doneKeys[el.dataset.id];
+    const queued = keys.filter(k => S.queue.some(m => m.clientKey === k));
+    S.queue = S.queue.filter(m => queued.indexOf(m.clientKey) < 0);
+    store.set('queue', S.queue);
+    rebuildLocal();
+    render();
+    try {
+      for (const k of keys) {
+        if (queued.indexOf(k) >= 0 || !S.sentIds[k]) continue;
+        const r = await api('field.undo', { movementId: S.sentIds[k] });
+        if (!r.ok) return toast('err', r.error || TX.generic);
+      }
+      if (keys.length > queued.length) refresh();
+    } catch (e) {
+      toast('err', TX.generic);
+    }
+  };
+  H.recvFinish = () => {
+    const v = cur();
+    const o = S.ix.orders[v.orderId];
+    const lines = orderLinesOf(v.orderId);
+    const done = lines.filter(x => x.remaining <= 0).length;
+    const sup = o ? (S.ix.sups[o.supplierId] || {}).name || '' : '';
+    queueDoc(v, v.firstKey || '', v.orderId, TX.docKinds.receive + ' · ' + fmt(TX.orderNo, { number: v.number || '' }) + (sup ? ' · ' + sup : ''));
+    goHome();
+    if (!o || done === lines.length) toast('ok', fmt(TX.receivedAll, { number: v.number || '' }));
+    else if (v.got) toast('ok', fmt(TX.recvSummary, { number: o.number, done, total: lines.length }));
+  };
   H.back = () => back();
   H.mine = () => go({ v: 'mine', tab: 'pulls' });
   H.tab = el => { cur().tab = el.dataset.tab; render(); };
@@ -695,7 +822,6 @@
   };
   H.undo = el => undo(el.dataset.key);
   H.send = () => sendFinish();
-  H.receiveGo = () => sendReceive();
 
   function readInputs(v) {
     const q = document.getElementById('qty');
@@ -794,22 +920,7 @@
     enqueue([m], fmt(TX.sent, { qty: label, item: v.itemId ? displayName(v.itemId) : v.unknownText }));
   }
 
-  function sendReceive() {
-    const v = cur();
-    readInputs(v);
-    const lines = orderLinesOf(v.orderId);
-    const ms = [];
-    lines.forEach(x => {
-      const q = Number(v.qtys[x.line.id]) || 0;
-      if (q > 0) ms.push({ clientKey: uuid(), clientAt: new Date().toISOString(), type: 'receive', orderLineId: x.line.id, itemId: x.line.itemId, qty: Math.round(q * x.per), to: v.to });
-    });
-    if (!ms.length) { document.getElementById('err').textContent = TX.qtyMissing; return; }
-    const o = S.ix.orders[v.orderId];
-    // מה עוד חסר אחרי הקבלה הזו (ההזמנה נסגרת לבד כשהכל הגיע)
-    const missing = lines.filter(x => (Number(v.qtys[x.line.id]) || 0) < x.remaining).length;
-    queueDoc(v, ms[0].clientKey, o.id, TX.docKinds.receive + ' · ' + fmt(TX.orderNo, { number: o.number }) + ' · ' + ((S.ix.sups[o.supplierId] || {}).name || ''));
-    enqueue(ms, missing ? fmt(TX.receivedSome, { number: o.number, n: missing }) : fmt(TX.receivedAll, { number: o.number }));
-  }
+
 
   // נכנס לתור, מתעדכן מיד במסך, ונשלח ברקע
   function enqueue(ms, label) {
@@ -826,6 +937,10 @@
   // עדכון מקומי עד שהשרת עונה (ספירה מחושבת רק בשרת)
   function applyLocal(m) {
     const d = S.data;
+    if (m.type === 'receive' && m.orderLineId) {
+      const ol = (d.orderLines || []).find(l => l.id === m.orderLineId);
+      if (ol) ol.received = (ol.received || 0) + m.qty;
+    }
     if (m.itemId && m.type !== 'count') {
       const row = d.stock[m.itemId] = d.stock[m.itemId] || {};
       const isHolder = h => h && h !== 'X' && h.indexOf('S:') !== 0;
@@ -893,11 +1008,20 @@
 
   // נתונים טריים מהשרת + מה שעוד בתור מעליהם
   function applyBoot(boot) {
+    S.serverBoot = JSON.stringify(boot);
     S.data = boot;
     S.queue.forEach(applyLocal);
     buildIndex();
     store.set('boot', S.data);
-    if (['finish', 'receiveOrder', 'unknown', 'pick'].indexOf(cur().v) < 0) render();
+    if (['finish', 'unknown', 'pick'].indexOf(cur().v) < 0) softRender();
+  }
+  // הנתונים מהשרת + מה שעוד בתור (אחרי ביטול של דיווח שבתור)
+  function rebuildLocal() {
+    if (!S.serverBoot) return;
+    S.data = JSON.parse(S.serverBoot);
+    S.queue.forEach(applyLocal);
+    buildIndex();
+    store.set('boot', S.data);
   }
 
   async function flush() {
@@ -933,7 +1057,7 @@
       scheduleRetry();
     } finally {
       S.flushing = false;
-      if (cur().v === 'home') render();
+      if (cur().v === 'home') softRender();
       if (ok && S.queue.length) setTimeout(flush, 300);
     }
   }
@@ -1093,7 +1217,7 @@
     if (S.queue.length) flush(); else refresh();
     flushDocs();
     setInterval(flushDocs, 30000);
-    const onNet = () => { if (cur().v === 'home') render(); if (navigator.onLine) { flush(); flushDocs(); } };
+    const onNet = () => { if (cur().v === 'home') softRender(); if (navigator.onLine) { flush(); flushDocs(); } };
     window.addEventListener('online', onNet);
     window.addEventListener('offline', onNet);
     // חזרה לאפליקציה: שולחים מיד, ומרעננים אם עברו יותר מדקה

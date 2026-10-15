@@ -172,3 +172,19 @@ input { font: inherit; }
 .thumb { position: relative; }
 .thumb img { width: 72px; height: 96px; object-fit: cover; border-radius: 8px; border: 1px solid #E4DED2; display: block; }
 .thumb button { position: absolute; top: -6px; left: -6px; width: 24px; height: 24px; border-radius: 50%; border: 0; background: #A32D2D; color: #fff; font-size: 12px; }
+
+/* קבלת סחורה – מוצר אחרי מוצר */
+.recvhead { position: sticky; top: 0; z-index: 4; background: #fff; padding: 6px 0 10px; display: flex; flex-direction: column; gap: 8px; }
+.recvprog .barw { height: 8px; background: #F3EEE7; border-radius: 4px; margin-top: 4px; }
+.recvprog .bar { height: 8px; background: #6A9A3A; border-radius: 4px; }
+.recvrow { border-bottom: 1px solid #E4DED2; padding: 10px 2px; }
+.recvrow .name { font-weight: 600; }
+.recvrow .sub { color: #8A7A68; font-size: 14px; }
+.recvctl { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
+.recvctl .stepper { gap: 6px; }
+.recvctl .stepper button { width: 42px; height: 42px; font-size: 20px; }
+.recvctl .stepper input { width: 70px; font-size: 18px; }
+.recvbtn { display: inline-flex; align-items: center; gap: 6px; background: #6A9A3A; color: #fff; border: 0; border-radius: 12px; padding: 10px 18px; font-size: 17px; }
+.recvbtn svg { width: 20px; height: 20px; }
+.recvrow.done { display: flex; align-items: center; gap: 8px; color: #3F6A1C; background: #EAF2DF; border-radius: 10px; padding: 8px 10px; margin-top: 6px; border-bottom: 0; }
+.recvrow.done svg { width: 16px; height: 16px; vertical-align: middle; }
