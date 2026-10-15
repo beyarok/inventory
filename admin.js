@@ -1286,7 +1286,8 @@
       admins.map(p => '<tr><td>' + esc(p.name) + '</td><td>' + esc(p.email) + '</td><td><input type="checkbox" data-a="toggleAlerts" data-id="' + p.id + '"' + (p.alerts ? ' checked' : '') + '></td></tr>').join('') +
       '</table><div class="btns" style="margin-top:10px"><button class="btn" data-a="addAdmin">' + ICON.plus + esc(TA.sAddAdmin) + '</button></div></div>' +
       '<div class="box" style="margin-top:12px"><h2 style="margin-top:0">' + esc(TA.sBackup) + '</h2><div class="hint" style="margin-bottom:8px">' + esc(TA.sBackupHint) + '</div>' +
-      '<button class="btn" data-a="backupNow">' + esc(TA.backupNow) + '</button></div>' +
+      '<div class="btns"><button class="btn" data-a="backupNow">' + esc(TA.backupNow) + '</button>' +
+      '<button class="btn" data-a="exportData">' + esc(TA.exportData) + '</button></div><div class="hint" style="margin-top:6px">' + esc(TA.exportDataHint) + '</div></div>' +
       '<div class="box" style="margin-top:12px"><h2 style="margin-top:0">' + esc(TA.listTabs.Units) + '</h2><div class="btns" style="margin-bottom:8px">' + listButtons('Units') + '</div>' + listTable('Units') + '</div>' +
       (window.ENGINE ? '<div class="box" style="margin-top:12px"><h2 style="margin-top:0">' + esc(TA.sNotify) + '</h2><div class="hint" style="margin-bottom:8px">' + esc(TA.sNotifyHint) + '</div>' +
         '<button class="btn" data-a="testNotify">' + esc(TA.testNotify) + '</button></div>' : '');
@@ -2577,6 +2578,22 @@
 
   // ---- דוחות ----
   H.report = el => { A.report = el.dataset.v; render(); };
+  // קובץ עם כל הנתונים (בלי קישורים אישיים) – לשמירה במחשב או כדי ש-Claude יוכל לקרוא
+  H.exportData = () => {
+    const tables = {};
+    Object.keys(A.d.tables).forEach(k => {
+      tables[k] = (A.d.tables[k] || []).map(r => { const o = Object.assign({}, r); delete o.token; return o; });
+    });
+    const day = new Date().toISOString().slice(0, 10);
+    const url = URL.createObjectURL(new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), tables }, null, 1)], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fmt(TA.exportDataFile, { date: day }) + '.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  };
   H.period = el => { A.period = el.dataset.v; render(); };
   H.exportCsv = () => {
     const d = reportData();
