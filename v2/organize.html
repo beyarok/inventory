@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#4A3524">
+<title>סידור משפחות</title>
+<link rel="icon" href="../icons/icon.svg" type="image/svg+xml">
+<link href="https://fonts.googleapis.com/css2?family=Assistant:wght@400;600;700&display=swap" rel="stylesheet">
+<script>window.V = '?v=' + Date.now(); document.write('<link rel="stylesheet" href="../admin.css' + V + '">');</script>
+<style>
+  .main { max-width: 1000px; margin: 0 auto; }
+  .tree { line-height: 1.9; }
+  .tree .f { font-weight: 700; color: var(--brown); }
+  .tree .new { color: var(--green-dark); font-size: 13px; }
+  .tree .it { color: var(--text); font-size: 14px; }
+  .tree .bad { color: var(--danger); font-size: 14px; }
+  .steps div { padding: 2px 0; }
+</style>
+</head>
+<body>
+<div class="main" id="main"><div class="center muted">טוען…</div></div>
+<script>
+  const FAKE = location.hostname === 'localhost' && /[?&]fake=1/.test(location.search);
+  (FAKE ? ['../../tests/fake-firebase.js'] : []).concat(['config.js', '../texts.js', 'core.js', 'engine.js']).forEach(f => document.write('<script src="' + f + V + '"><\/script>'));
+</script>
+<script>
+// סידור עץ הפריטים לפי קובץ תוכנית (משפחות, תתי-משפחות, לאיפה כל פריט הולך, איחוד כפולים).
+// לפני שמשהו משתנה – רואים הכל כאן. אפשר להריץ שוב בלי נזק (מה שכבר במקום – נשאר).
+(async () => {
+  const main = document.getElementById('main');
+  const esc = s => String(s === null || s === undefined ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  // השוואת שמות: בלי רווחים כפולים, גרשיים אחידים, "וו" = "ו"
+  const key = s => String(s || '').replace(/[״”“]/g, '"').replace(/[׳’]/g, "'").replace(/וו/g, 'ו').replace(/\s+/g, ' ').trim();
+  const api = req => window.LOCAL_API(Object.assign({ session: 'fb' }, req));
+  await ENGINE.init('admin');
+  let boot = await api({ action: 'admin.bootstrap' });
+  if (!boot.ok) {
+    main.innerHTML = '<div class="box" style="margin-top:40px">צריך קודם להיכנס למסך הניהול בדפדפן הזה (כניסה עם גוגל או הקישור האישי), ואז לחזור לכאן.<br><br><a class="link" href="admin.html">למסך הניהול</a></div>';
+    return;
+  }
+  let plan = null;
+
+  // ---------- מצב העץ ----------
+  function index(b) {
+    const items = b.tables.Items.filter(i => !i.archived);
+    const kids = {};
+    items.forEach(i => { (kids[i.parentId || ''] = kids[i.parentId || ''] || []).push(i); });
+    const byId = {};
+    items.forEach(i => { byId[i.id] = i; });
+    const isLeaf = i => !kids[i.id] && !i.isFolder;
+    const leafByName = {};
+    items.filter(isLeaf).forEach(i => { (leafByName[key(i.name)] = leafByName[key(i.name)] || []).push(i); });
+    const pathOf = id => { const p = []; let it = byId[byId[id] ? byId[id].parentId : '']; let g = 0; while (it && g++ < 50) { p.unshift(it.name); it = byId[it.parentId]; } return p; };
+    const folderAt = path => {
+      let pid = '';
+      for (const n of path) {
+        const f = (kids[pid] || []).find(c => !isLeaf(c) && key(c.name) === key(n));
+        if (!f) return null;
+        pid = f.id;
+      }
+      return pid ? byId[pid] : null;
+    };
+    const inherited = (id, f) => { let it = byId[id], g = 0; while (it && g++ < 50) { if (it[f]) return it[f]; it = byId[it.parentId]; } return ''; };
+    return { items, kids, byId, isLeaf, leafByName, pathOf, folderAt, inherited };
+  }
+  const stockOf = (b, id) => b.stock[id] || {};
+
+  function render(msg) {
+    let h = '<h1>סידור משפחות</h1>';
+    if (!plan) {
+      h += '<div class="box"><p>בוחרים את קובץ התוכנית (‎.json). לפני שמשהו משתנה – רואים כאן את העץ החדש, מה זז לאן, ומה לא נמצא.</p>' +
+        '<input type="file" id="file" accept=".json,application/json"></div>';
+      main.innerHTML = h;
+      document.getElementById('file').onchange = async e => {
+        try { plan = JSON.parse(await e.target.files[0].text()); render(); } catch (err) { alert('הקובץ לא נקרא: ' + err.message); }
+      };
+      return;
+    }
+    const X = index(boot.data);
+    const found = name => X.leafByName[key(name)] || [];
+    // עץ התוכנית, עם הפריטים בכל משפחה
+    const byPath = {};
+    plan.items.forEach(x => { (byPath[x.path.join('›')] = byPath[x.path.join('›')] || []).push(x); });
+    let tree = '';
+    plan.folders.forEach(f => {
+      const exists = X.folderAt(f.path);
+      tree += '<div style="padding-right:' + (f.path.length - 1) * 22 + 'px"><span class="f">' + esc(f.path[f.path.length - 1]) + '</span>' + (exists ? '' : ' <span class="new">(חדשה)</span>') + '</div>';
+      (byPath[f.path.join('›')] || []).forEach(x => {
+        const m = found(x.name);
+        tree += '<div class="' + (m.length === 1 ? 'it' : 'bad') + '" style="padding-right:' + (f.path.length * 22) + 'px">• ' + esc(x.name) +
+          (m.length === 0 ? ' – לא נמצא במערכת' : m.length > 1 ? ' – נמצאו ' + m.length + ' פריטים בשם הזה' : X.pathOf(m[0].id).join('›') === f.path.join('›') ? ' ✓' : ' <span class="muted">(היום: ' + esc(X.pathOf(m[0].id).join(' › ') || 'ראשי') + ')</span>') + '</div>';
+      });
+    });
+    // איחוד כפולים
+    const merges = (plan.merges || []).map(m => {
+      const a = found(m.from)[0];
+      const b = found(m.into)[0];
+      const st = a ? stockOf(boot.data, a.id) : {};
+      return { m, a, b, st };
+    });
+    const mergeHtml = merges.map(x => '<div>' + (x.a && x.b
+      ? '"' + esc(x.m.from) + '" מתאחד לתוך "' + esc(x.m.into) + '"' + (Object.keys(x.st).length ? ' – המלאי שלו מתווסף: ' + Object.keys(x.st).map(h => esc(holderName(h)) + ' ' + x.st[h]).join(', ') : ' – אין לו מלאי')
+      : !x.a ? '✓ "' + esc(x.m.from) + '" כבר לא קיים' : '<span class="err">"' + esc(x.m.into) + '" לא נמצא</span>') + '</div>').join('');
+    // פריטים שלא בתוכנית – נשארים איפה שהם
+    const inPlan = {};
+    plan.items.forEach(x => { inPlan[key(x.name)] = true; });
+    (plan.merges || []).forEach(m => { inPlan[key(m.from)] = true; });
+    const left = X.items.filter(i => X.isLeaf(i) && !inPlan[key(i.name)]);
+    const missing = plan.items.filter(x => found(x.name).length !== 1);
+    h += '<div class="box" style="margin-bottom:12px">' + esc(plan.title || '') + '<br>' + plan.folders.length + ' משפחות · ' + plan.items.length + ' פריטים · ' +
+      (missing.length ? '<b class="err">' + missing.length + ' לא נמצאו</b>' : 'כל הפריטים נמצאו') + '</div>' +
+      '<div class="box tree">' + tree + '</div>' +
+      (merges.length ? '<h2>איחוד כפולים</h2><div class="box">' + mergeHtml + '</div>' : '') +
+      '<h2>לא בתוכנית – נשארים איפה שהם (' + left.length + ')</h2><div class="box">' + (left.length ? left.map(i => esc(i.name) + ' <span class="muted">(' + esc(X.pathOf(i.id).join(' › ') || 'ראשי') + ')</span>').join('<br>') : 'אין') + '</div>' +
+      (plan.removeEmptyOld ? '<div class="hint" style="margin:10px 0">תיקיות ישנות שיישארו ריקות – יוסרו (אפשר לשחזר מהארכיון). משפחות חדשות ריקות נשארות.</div>' : '') +
+      '<div class="btns" style="margin-top:12px"><button class="btn p" id="go">בצע את הסידור</button><button class="btn" id="other">קובץ אחר</button></div>' +
+      '<div class="steps box" id="steps" style="margin-top:12px;display:none"></div>' + (msg ? '<div class="err">' + esc(msg) + '</div>' : '');
+    main.innerHTML = h;
+    document.getElementById('other').onclick = () => { plan = null; render(); };
+    document.getElementById('go').onclick = run;
+  }
+  function holderName(h) {
+    const t = boot.data.tables;
+    const [k, id] = h.split(':');
+    const row = k === 'L' ? t.Locations.find(l => l.id === id) : k === 'P' ? t.People.find(p => p.id === id) : null;
+    return row ? row.name : h;
+  }
+
+  async function run() {
+    const btn = document.getElementById('go');
+    btn.disabled = true;
+    const steps = document.getElementById('steps');
+    steps.style.display = 'block';
+    const say = t => steps.insertAdjacentHTML('beforeend', '<div>' + esc(t) + '</div>');
+    const fail = t => { steps.insertAdjacentHTML('beforeend', '<div class="err">' + esc(t) + '</div>'); btn.disabled = false; };
+    const call = async req => {
+      const r = await api(req);
+      if (!r.ok) throw new Error(r.error || 'שגיאה');
+      return r.data;
+    };
+    const refresh = async () => { boot = await api({ action: 'admin.bootstrap' }); return index(boot.data); };
+    try {
+      let X = index(boot.data);
+      // 1. משפחות (כולל סדר הופעה)
+      const oldFolders = X.items.filter(i => !X.isLeaf(i)).map(i => i.id);
+      const planFolderIds = {};
+      let created = 0;
+      for (const f of plan.folders) {
+        let cur = X.folderAt(f.path);
+        if (!cur) {
+          const parent = f.path.length > 1 ? X.folderAt(f.path.slice(0, -1)) : null;
+          await call({ action: 'admin.save', entity: 'Items', record: { parentId: parent ? parent.id : '', name: f.path[f.path.length - 1], isFolder: true, sort: f.sort || 0 } });
+          created++;
+          X = await refresh();
+          cur = X.folderAt(f.path);
+        } else if (f.sort && Number(cur.sort || 0) !== f.sort) {
+          await call({ action: 'admin.save', entity: 'Items', record: { id: cur.id, sort: f.sort } });
+        }
+        planFolderIds[cur.id] = true;
+      }
+      say('✓ משפחות: ' + created + ' חדשות, ' + (plan.folders.length - created) + ' כבר היו');
+      X = await refresh();
+      // 2. העברת פריטים. יחידה וסוג שהגיעו בירושה מהתיקייה הישנה – נשמרים על הפריט עצמו
+      let moved = 0;
+      for (const x of plan.items) {
+        const m = X.leafByName[key(x.name)] || [];
+        if (m.length !== 1) continue;
+        const it = m[0];
+        const target = X.folderAt(x.path);
+        if (!target || it.parentId === target.id) continue;
+        const rec = { id: it.id, parentId: target.id };
+        if (!it.unitId && X.inherited(it.id, 'unitId')) rec.unitId = X.inherited(it.id, 'unitId');
+        if (!it.kind && X.inherited(it.id, 'kind')) rec.kind = X.inherited(it.id, 'kind');
+        await call({ action: 'admin.save', entity: 'Items', record: rec });
+        moved++;
+      }
+      say('✓ הועברו ' + moved + ' פריטים');
+      X = await refresh();
+      // 3. איחוד כפולים: המלאי של הכפול עובר לפריט הנכון (ספירה בכל מקום), השם הישן נשמר ככינוי, והכפול מוסר
+      for (const mg of plan.merges || []) {
+        const a = (X.leafByName[key(mg.from)] || [])[0];
+        const b = (X.leafByName[key(mg.into)] || [])[0];
+        if (!a) { say('✓ "' + mg.from + '" כבר לא קיים'); continue; }
+        if (!b) { fail('לא נמצא "' + mg.into + '"'); return; }
+        const sa = stockOf(boot.data, a.id);
+        const sb = stockOf(boot.data, b.id);
+        for (const h of Object.keys(sa)) {
+          if (!sa[h]) continue;
+          await call({ action: 'admin.movement.add', movement: { type: 'count', itemId: b.id, countedQty: Math.max(0, (sb[h] || 0) + sa[h]), from: h, note: 'איחוד עם "' + a.name + '"' } });
+          await call({ action: 'admin.movement.add', movement: { type: 'count', itemId: a.id, countedQty: 0, from: h, note: 'אוחד לתוך "' + b.name + '"' } });
+        }
+        const aliases = String(b.aliases || '').split(';').map(s => s.trim()).filter(Boolean);
+        if (aliases.indexOf(a.name) < 0) aliases.push(a.name);
+        await call({ action: 'admin.save', entity: 'Items', record: { id: b.id, aliases: aliases.join(';') } });
+        X = await refresh();
+        await call({ action: 'admin.archive', entity: 'Items', id: a.id });
+        say('✓ "' + a.name + '" אוחד לתוך "' + b.name + '"');
+        X = await refresh();
+      }
+      // 4. תיקיות ישנות שנשארו ריקות – מוסרות (מלמטה למעלה)
+      if (plan.removeEmptyOld) {
+        let removed = 0;
+        for (let round = 0; round < 10; round++) {
+          const empty = X.items.filter(i => oldFolders.indexOf(i.id) >= 0 && !planFolderIds[i.id] && !X.kids[i.id]);
+          if (!empty.length) break;
+          for (const f of empty) { await call({ action: 'admin.archive', entity: 'Items', id: f.id }); removed++; }
+          X = await refresh();
+        }
+        say('✓ הוסרו ' + removed + ' תיקיות ישנות ריקות');
+      }
+      say('הסידור הסתיים.');
+      steps.insertAdjacentHTML('beforeend', '<div style="margin-top:8px"><a class="btn p" href="admin.html">למסך הניהול › פריטים</a></div>');
+      btn.style.display = 'none';
+    } catch (e) {
+      fail('תקלה: ' + (e.message || e) + '. אפשר להריץ שוב – מה שכבר נעשה לא ייעשה פעמיים.');
+    }
+  }
+
+  render();
+})();
+</script>
+</body>
+</html>
