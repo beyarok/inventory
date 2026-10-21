@@ -518,14 +518,26 @@
     return top(TX.receiveTitle, true) + '<main class="body"><div class="list">' +
       (rows.length ? rows.map(x => {
         const dr = rcvDraft(x.o.id, x.d);
+        const other = othersReceived(x.o.id, x.d);
         return '<button class="row" data-a="order" data-id="' + x.o.id + '" data-dest="' + x.d + '"><span class="grow"><div class="name">' +
           esc(fmt(TX.orderLine, { number: x.o.number, supplier: (S.ix.sups[x.o.supplierId] || {}).name || '', n: x.n })) + '</div>' +
           '<div class="sub">' + esc(fmt(TX.toPlace, { place: holderName('L:' + x.d) })) + (dr ? ' · <b>' + esc(fmt(TX.rcvHasDraft, { n: Object.keys(dr.counted || {}).length })) + '</b>' : '') +
+          (other ? '<br><b>' + esc(fmt(TX.rcvOtherStarted, other)) + '</b>' : '') +
           '</div></span>' + ICON.chevron + '</button>';
       }).join('') : '<div class="empty">' + esc(TX.noOpenOrders) + '</div>') +
       '<button class="row" data-a="action" data-action="purchase"><span class="grow"><div class="name">' + esc(TX.noOrder) + '</div></span>' + ICON.chevron + '</button>' +
       '</div></main>';
   };
+
+  // עובד אחר כבר קלט מההזמנה הזו (למחסן הזה) – מי ומתי האחרון
+  function othersReceived(orderId, destId) {
+    let last = null;
+    orderLinesOf(orderId, destId).forEach(x => {
+      const l = x.line;
+      if (l.received > 0 && l.lastBy && l.lastBy !== S.data.me.id && (!last || l.lastAt > last.lastAt)) last = l;
+    });
+    return last ? { name: (S.ix.people[last.lastBy] || {}).name || '', date: relDate(last.lastAt) } : null;
+  }
 
   function orderLinesOf(orderId, destId) {
     const o = S.ix.orders[orderId] || {};
@@ -543,7 +555,7 @@
   const rcvKey = (id, dest) => 'rcv:' + id + (dest ? ':' + dest : '');
   const rcvDraft = (id, dest) => store.get(rcvKey(id, dest), null);
   function saveRcv(v) {
-    if (Object.keys(v.counted).length) store.set(rcvKey(v.orderId, v.destId), { counted: v.counted, to: v.to });
+    if (Object.keys(v.counted).length) store.set(rcvKey(v.orderId, v.destId), { counted: v.counted, to: v.to, base: v.base });
     else store.set(rcvKey(v.orderId, v.destId), null);
   }
 
@@ -555,6 +567,7 @@
       v.destId = v.destId || o.destId;
       const d = rcvDraft(o.id, v.destId) || {};
       v.counted = d.counted || {};
+      v.base = d.base || {};
       v.to = d.to || 'L:' + v.destId;
       v.qtys = {};
       v.q = '';
@@ -562,7 +575,12 @@
     const lines = orderLinesOf(o.id, v.destId);
     const open = lines.filter(x => x.remaining > 0);
     // מה שכבר התקבל בינתיים (למשל ממכשיר אחר) – יוצא מהטיוטה
-    Object.keys(v.counted).forEach(id => { if (!open.some(x => x.line.id === id)) delete v.counted[id]; });
+    Object.keys(v.counted).forEach(id => {
+      if (open.some(x => x.line.id === id)) return;
+      const x = lines.find(y => y.line.id === id);
+      if (x && (v.dropped = v.dropped || []).indexOf(x.line.itemId) < 0) v.dropped.push(x.line.itemId);
+      delete v.counted[id];
+    });
     saveRcv(v);
     const n = open.filter(x => v.counted[x.line.id] !== undefined).length;
     const pending = open.length - n;
@@ -571,6 +589,7 @@
       '<div class="barw"><div class="bar" style="width:' + (open.length ? Math.round(n / open.length * 100) : 0) + '%"></div></div></div>' +
       '<input id="rq" class="text" type="search" placeholder="' + esc(TX.recvSearch) + '" value="' + esc(v.q) + '" autocomplete="off"></div>' +
       '<div class="hint">' + esc(TX.rcvDraftHint) + '</div>' +
+      (v.dropped && v.dropped.length ? '<div class="banner warn">' + esc(fmt(TX.rcvDropped, { items: v.dropped.map(displayName).join(', ') })) + '</div>' : '') +
       '<div class="field"><div class="label">' + esc(TX.arrivedTo) + '</div>' + chipsHtml('to', locChips(STOCK_TYPES), v.to) + '</div>' +
       photosHtml(v) +
       '<div id="recvList">' + rcvListHtml(v, lines) + '</div>' +
@@ -590,7 +609,8 @@
     // כמות ברירת מחדל = מה שנשאר (נשמרת, כדי ש-+/− יתחילו ממנה)
     const qtyOf = x => { if (v.qtys[x.line.id] === undefined) v.qtys[x.line.id] = x.remaining; return v.qtys[x.line.id]; };
     const sub = x => esc(fmt(TX.recvOrdered, { n: num(x.line.qtyBuy) + (x.unit ? ' ' + x.unit : '') })) +
-      (x.line.received > 0 ? ' · ' + esc(fmt(TX.recvLeft, { n: num(x.remaining) })) : '');
+      (x.line.received > 0 ? ' · ' + esc(fmt(TX.recvLeft, { n: num(x.remaining) })) +
+        (x.line.lastBy && x.line.lastBy !== S.data.me.id ? ' · ' + esc(fmt(TX.rcvBy, { name: (S.ix.people[x.line.lastBy] || {}).name || '' })) : '') : '');
     let h = '';
     if (todo.length) {
       h += '<div class="label">' + esc(fmt(TX.rcvTodo, { n: todo.length })) + '</div><div class="list">' + todo.map(x =>
@@ -726,6 +746,7 @@
     const x = orderLinesOf(v.orderId, v.destId).find(y => y.line.id === el.dataset.id);
     if (!x) return;
     v.counted[x.line.id] = v.qtys[x.line.id] !== undefined ? v.qtys[x.line.id] : x.remaining;
+    v.base[x.line.id] = x.line.received;
     saveRcv(v);
     render();
   };
@@ -749,7 +770,7 @@
     const left = orderLinesOf(v.orderId, v.destId).filter(x => x.remaining > 0 && v.counted[x.line.id] === undefined);
     if (!left.length) return;
     if (!(await confirmBox(fmt(TX.rcvAllConfirm, { n: left.length }), TX.rcvAllRest))) return;
-    left.forEach(x => { v.counted[x.line.id] = v.qtys[x.line.id] !== undefined ? v.qtys[x.line.id] : x.remaining; });
+    left.forEach(x => { v.counted[x.line.id] = v.qtys[x.line.id] !== undefined ? v.qtys[x.line.id] : x.remaining; v.base[x.line.id] = x.line.received; });
     saveRcv(v);
     render();
   };
@@ -765,6 +786,16 @@
       if (q > 0) ms.push({ clientKey: uuid(), clientAt: new Date().toISOString(), type: 'receive', orderLineId: x.line.id, itemId: x.line.itemId, qty: Math.round(q * x.per), to: v.to });
     });
     if (!ms.length) { document.getElementById('err').textContent = TX.qtyMissing; return; }
+    const over = open.filter(x => (Number(v.counted[x.line.id]) || 0) > x.remaining);
+    if (over.length) {
+      const txt = over.map(x => {
+        const base = v.base[x.line.id] !== undefined ? v.base[x.line.id] : x.line.received;
+        const by = x.line.received > base && x.line.lastBy !== S.data.me.id
+          ? ' ' + fmt(TX.rcvOverMeanwhile, { name: (S.ix.people[x.line.lastBy] || {}).name || '' }) : '';
+        return '• ' + displayName(x.line.itemId) + ': ' + fmt(TX.rcvOverLine, { left: num(x.remaining), n: num(Number(v.counted[x.line.id])) }) + by;
+      }).join('\n');
+      if (!(await confirmBox(TX.rcvOverTitle + '\n\n' + txt + '\n\n' + TX.rcvOverQ, TX.rcvOverYes))) return;
+    }
     if (!(await confirmBox(fmt(TX.rcvSendConfirm, { n: ms.length, place: holderName(v.to) }), fmt(TX.rcvSend, { n: ms.length })))) return;
     const missing = open.filter(x => (Number(v.counted[x.line.id]) || 0) < x.remaining).length;
     queueDoc(v, ms[0].clientKey, o.id, TX.docKinds.receive + ' · ' + fmt(TX.orderNo, { number: o.number }) + ' · ' + ((S.ix.sups[o.supplierId] || {}).name || ''));
@@ -905,7 +936,7 @@
     return new Promise(resolve => {
       const bg = document.createElement('div');
       bg.className = 'modal-bg';
-      bg.innerHTML = '<div class="modal"><p>' + esc(text) + '</p><div class="btns"><button class="yes">' + esc(yes) +
+      bg.innerHTML = '<div class="modal"><p style="white-space:pre-line">' + esc(text) + '</p><div class="btns"><button class="yes">' + esc(yes) +
         '</button><button class="no">' + esc(TX.cancel) + '</button></div></div>';
       bg.addEventListener('click', e => {
         if (e.target.closest('.yes')) { bg.remove(); resolve(true); }

@@ -453,7 +453,8 @@
     const what = esc(m.type === 'pull' && String(m.from).indexOf('P:') === 0 ? TA.usedMove : (TA.moveTypes[m.type] || m.type)) + ' ' + (m.qty ? num(m.qty) + ' ' + esc(m.itemId ? unitLabel(m.itemId) : '') + ' ' : '') +
       esc(m.itemId ? displayName(m.itemId) : uk ? '"' + uk.text + '"' : '') +
       (A.ix.reversed[m.id] ? ' <span class="tag">' + esc(TA.reversedTag) + '</span>' : '') + docLinks(m.clientKey && A.ix.docsByKey[m.clientKey]) +
-      (String(m.flags).indexOf('overdraw') >= 0 ? ' <span class="tag" style="background:var(--warn-bg);color:var(--warn)">' + esc(TA.overdrawTag) + '</span>' : '');
+      (String(m.flags).indexOf('overdraw') >= 0 ? ' <span class="tag" style="background:var(--warn-bg);color:var(--warn)">' + esc(TA.overdrawTag) + '</span>' : '') +
+      (String(m.flags).indexOf('overReceive') >= 0 ? ' <span class="tag" style="background:var(--warn-bg);color:var(--warn)">' + esc(TA.overReceiveTag) + '</span>' : '');
     const btn = '<td>' + (dead || isTmp(m.id) ? '' : '<button class="btn sm" data-a="reverseMove" data-id="' + m.id + '">' + esc(TA.undoMove) + '</button>') + '</td>';
     const who = '<td>' + esc((A.ix.people[m.byPersonId] || {}).name) + '</td>';
     const time = '<td class="muted small" style="white-space:nowrap">' + esc(when(m.clientAt || m.at)) + '</td>';
@@ -885,7 +886,8 @@
       '<label>' + esc(TA.fSupplier) + '</label>' + (draft ? '<select class="in" id="o_sup">' + sups.map(s => '<option value="' + s.id + '"' + (s.id === o.supplierId ? ' selected' : '') + '>' + esc(s.name) + '</option>').join('') + '</select>' : '<span>' + esc((A.ix.sups[o.supplierId] || {}).name) + '</span>') +
       '<label>' + esc(TA.fDest) + '</label>' + (draft ? '<select class="in" id="o_dest">' + dests.map(l => '<option value="' + l.id + '"' + (l.id === o.destId ? ' selected' : '') + '>' + esc(l.name) + '</option>').join('') + '</select>' : '<span>' + esc(orderDests(o).map(id => (A.ix.locs[id] || {}).name || '').join(', ')) + '</span>') +
       '<label>' + esc(TA.fIncVat) + '</label>' + (draft ? '<input type="checkbox" id="o_vat"' + (o.pricesIncludeVat ? ' checked' : '') + '>' : '<span>' + (o.pricesIncludeVat ? '✓' : '—') + '</span>') +
-      '<label>' + esc(TA.fNote) + '</label>' + (draft ? '<input class="in" id="o_note" value="' + esc(o.note) + '">' : '<span>' + esc(o.note) + '</span>') + '</div></div>';
+      '<label>' + esc(TA.fNoteInternal) + '</label>' + (draft ? '<input class="in" id="o_note" value="' + esc(o.note) + '">' : '<span>' + esc(o.note) + '</span>') +
+      (!draft && o.supplierNote ? '<label>' + esc(TA.fNoteSupplier) + '</label><span>' + esc(o.supplierNote) + '</span>' : '') + '</div></div>';
     const anyDisc = lines.some(l => l.discount);
     const openO = o.status === 'sent' || o.status === 'partial';
     // כמה מחסנים: כותרת לכל מחסן בתוך הטבלה
@@ -1798,7 +1800,7 @@
         r.ids[dest] = l.id;
       });
       d = A.drafts[o.id] = {
-        supplierId: o.supplierId, destIds: orderDests(o), vat: !!o.pricesIncludeVat, note: o.note || '', extraDiscount: Number(o.extraDiscount) || 0,
+        supplierId: o.supplierId, destIds: orderDests(o), vat: !!o.pricesIncludeVat, note: o.note || '', supplierNote: o.supplierNote || '', extraDiscount: Number(o.extraDiscount) || 0,
         lines: rows,
       };
     }
@@ -1812,7 +1814,7 @@
       if (!q && !r.ids[dest]) return;
       lines.push({ id: r.ids[dest], itemId: r.itemId, destId: dest, qtyBuy: q, listPrice: r.listPrice === '' ? null : Number(r.listPrice), discount: Number(r.discount) || 0, saveToList: !!r.saveToList });
     }));
-    return { id: o.id, supplierId: d.supplierId, destId: d.destIds[0], destIds: d.destIds, pricesIncludeVat: d.vat, note: d.note, extraDiscount: Number(d.extraDiscount) || 0, lines };
+    return { id: o.id, supplierId: d.supplierId, destId: d.destIds[0], destIds: d.destIds, pricesIncludeVat: d.vat, note: d.note, supplierNote: d.supplierNote, extraDiscount: Number(d.extraDiscount) || 0, lines };
   }
   let draftTimer = null;
   let draftSaving = null;
@@ -1913,7 +1915,8 @@
       '<div class="btns" style="margin-top:10px"><label class="muted">' + esc(TA.fDests) + '</label>' +
       places.map(l => '<button class="chipbtn' + (d.destIds.indexOf(l.id) >= 0 ? ' on' : '') + '" data-a="odDest" data-id="' + l.id + '">' + (d.destIds.indexOf(l.id) >= 0 ? '✓ ' : '+ ') + esc(l.name) + '</button>').join('') +
       '<span class="hint">' + esc(multi ? TA.destsHintMulti : TA.destsHint) + '</span></div>' +
-      '<div class="inline" style="margin-top:8px"><input class="in" data-od="note" placeholder="' + esc(TA.fNote) + '" value="' + esc(d.note) + '"></div></div>' +
+      '<div class="inline" style="margin-top:8px"><input class="in" data-od="note" placeholder="' + esc(TA.fNoteInternal) + '" title="' + esc(TA.fNoteInternal) + '" value="' + esc(d.note) + '">' +
+      '<input class="in" data-od="supplierNote" placeholder="' + esc(TA.fNoteSupplier) + '" title="' + esc(TA.fNoteSupplier) + '" value="' + esc(d.supplierNote) + '"></div></div>' +
       selBar('ol') + '<div class="hint" style="margin-bottom:6px">' + esc(TA.draftHint) + '</div>' +
       '<div class="box" style="padding:0;overflow:auto"><table><tr><th>' + allBox('ol') + '</th><th>' + esc(TA.cItem) + '</th>' +
       (multi ? d.destIds.map(id => '<th>' + esc(destName(id)) + '</th>').join('') + '<th>' + esc(TA.cTotalQty) + '</th>' : '<th>' + esc(TA.cQty) + '</th>') +
@@ -2255,8 +2258,12 @@
     if (waitTmp(A.sel)) return;
     const it = item(A.sel);
     if (descendants(it.id).some(hasStock)) return toast(TA.folderHasStock, true);
-    if (!(await confirmBox(fmt(TA.confirmArchive, { name: it.name }), TA.remove, true))) return;
     const ids = descendants(it.id);
+    const openO = A.d.tables.Orders.find(o => ['draft', 'sent', 'partial'].indexOf(o.status) >= 0 &&
+      A.d.tables.OrderLines.some(l => l.orderId === o.id && l.qtyBuy > 0 && ids.indexOf(l.itemId) >= 0 &&
+        (A.d.receivedByLine[l.id] || 0) < l.qtyBuy * (l.buyUnitQty || 1)));
+    if (openO) return toast(fmt(TA.itemInOpenOrder, { name: it.name, number: openO.number }), true);
+    if (!(await confirmBox(fmt(TA.confirmArchive, { name: it.name }), TA.remove, true))) return;
     A.sel = it.parentId || '';
     optimistic('admin.archive', { entity: 'Items', id: it.id }, d => {
       d.tables.Items.forEach(i => { if (ids.indexOf(i.id) >= 0) i.archived = true; });

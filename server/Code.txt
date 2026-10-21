@@ -31,7 +31,7 @@ const SCHEMA = {
   UnknownItems: ['id', 'text', 'movementId', 'byPersonId', 'at', 'status', 'itemId'],
   // extraDiscount – הנחה נוספת על כל ההזמנה (%), אחרי ההנחות בשורות
   Orders: ['id', 'number:n', 'supplierId', 'destId', 'status', 'pricesIncludeVat:b', 'vatRate:n',
-    'createdBy', 'createdAt', 'sentAt', 'closedAt', 'note', 'extraDiscount:n', 'destIds'],  // destIds – כמה מחסנים (מופרדים בפסיק); destId = הראשון
+    'createdBy', 'createdAt', 'sentAt', 'closedAt', 'note', 'extraDiscount:n', 'destIds', 'supplierNote'],  // note = פנימית; supplierNote = מודפסת במסמך לספק  // destIds – כמה מחסנים (מופרדים בפסיק); destId = הראשון
   // unitPriceBuy = נטו (מחירון פחות הנחה). listPrice/discount – מה שסגרו בהזמנה הזו. saveToList – לעדכן את מחירון הספק בשליחה
   // expectedAt – מתי הספק אמר שהיתרה תגיע (YYYY-MM-DD). לפיו נקבע איחור; בלעדיו – ימים מהשליחה
   OrderLines: ['id', 'orderId', 'itemId', 'qtyBuy:n', 'buyUnitQty:n', 'unitPriceBuy:n', 'listPrice:n', 'discount:n', 'saveToList:b', 'expectedAt', 'destId'],  // destId – לאיזה מחסן השורה (ריק = היעד של ההזמנה)
@@ -96,6 +96,7 @@ const MSG = {
   folderHasStock: 'בתיקייה הזו יש פריטים עם מלאי. קודם צריך להעביר אותם או לאפס את המלאי.',
   locationHasStock: 'ב{name} יש עדיין מלאי. קודם צריך להעביר אותו.',
   projectHasMoves: 'על {name} כבר נרשמו דיווחים, אז אפשר רק לסגור אותו (אם הדיווחים נרשמו בטעות – קודם לבטל אותם בארכיון › כל התנועות).',
+  itemInOpenOrder: '"{name}" נמצא בהזמנה פתוחה מספר {number}, ולכן אי אפשר להסיר אותו עכשיו. אפשר אחרי שההזמנה תתקבל, תיסגר או תבוטל.',
   lastAdmin: 'אי אפשר להסיר את המנהל האחרון. קודם צריך להוסיף מנהל אחר.',
   undoExpired: 'עבר הזמן לביטול. אפשר לתקן עם פעולה הפוכה, או לבקש מהמנהל.',
   conflict: 'מישהו אחר שינה את זה בינתיים. רענן ונסה שוב.',
@@ -626,6 +627,9 @@ function recordMovement_(inp, actor, isAdmin) {
     m.from = 'S:' + order.supplierId;
     m.to = inp.to || 'L:' + (line.destId || order.destId);
     m.unitPrice = unitPriceFromLine_(line, order);
+    // יותר ממה שהוזמן (טעות הקלדה, או ששני טלפונים קלטו את אותו משלוח) – לא חוסמים, מסמנים למנהל
+    const before = Model.receivedByLine()[line.id] || 0;
+    if (before + Number(inp.qty) > line.qtyBuy * (line.buyUnitQty || 1)) flags.push('overReceive');
   }
 
   // ---- פריט ----
@@ -793,6 +797,7 @@ function saveOrder_(data, actor) {
   const fields = {
     supplierId: supplier.id, destId: dest.id, destIds: destIds.join(','), pricesIncludeVat: !!data.pricesIncludeVat,
     note: String(data.note || '').slice(0, 1000),
+    supplierNote: String(data.supplierNote || '').slice(0, 1000),
   };
   // הנחה נוספת על כל ההזמנה. בהזמנה חדשה – ברירת המחדל היא ההנחה הכללית של הספק
   if (data.extraDiscount !== undefined && data.extraDiscount !== null && data.extraDiscount !== '') {
@@ -991,7 +996,8 @@ function orderPdf_(id) {
     '<div class="t">' + (extra ? 'סה"כ שורות: ' + money(sub) + '<br>הנחה נוספת ' + extra + '%: -' + money(sub - total) + '<br>' : '') +
     'סה"כ לפני מע"מ: ' + money(before) + '<br>מע"מ ' + order.vatRate + '%: ' + money(after - before) +
     '<br><b>סה"כ כולל מע"מ: ' + money(after) + '</b></div>' +
-    (order.note ? '<div class="n"><b>הערות:</b> ' + esc(order.note) + '</div>' : '') +
+    // רק ההערה לספק מודפסת. ההערה הפנימית (note) לא יוצאת החוצה.
+    (order.supplierNote ? '<div class="n"><b>הערות:</b> ' + esc(order.supplierNote) + '</div>' : '') +
     '<div class="f">הופק ב-' + Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'dd.MM.yyyy HH:mm') + '</div>' +
     '</body></html>';
   const pdf = Utilities.newBlob(html, 'text/html', 'order.html').getAs('application/pdf');
@@ -1278,6 +1284,10 @@ function archive_(entity, id, actor) {
   if (entity === 'Units' && Db.all('Items').some(it => it.unitId === id)) userError_('היחידה בשימוש בפריטים. קודם צריך לשנות להם יחידה.');
   const ids = entity === 'Items' ? Model.descendants(id) : [id];
   if (entity === 'Items' && ids.some(i => holdersOf_(i).length)) userError_(MSG.folderHasStock);
+  if (entity === 'Items') {
+    const o = openOrderWithItems_(ids);
+    if (o) userError_(MSG.itemInOpenOrder, { name: rec.name, number: o.number });
+  }
 
   ids.forEach(i => Db.update(entity, i, { archived: true }));
   if (entity === 'Locations' || entity === 'Projects') {
@@ -1286,6 +1296,16 @@ function archive_(entity, id, actor) {
   log_(actor, 'archive', entity, id, ENTITY_NAMES[entity] + ': ' + rec.name);
   Model.reset();
   return { archived: ids };
+}
+
+// הזמנה פתוחה (טיוטה / נשלחה / התקבלה חלקית) שעוד מחכה לאחד הפריטים – אחרת אי אפשר יהיה לקלוט אותו
+function openOrderWithItems_(itemIds) {
+  const received = Model.receivedByLine();
+  const open = {};
+  Db.all('Orders').forEach(o => { if (['draft', 'sent', 'partial'].indexOf(o.status) >= 0) open[o.id] = o; });
+  const l = Db.all('OrderLines').find(x => open[x.orderId] && x.qtyBuy > 0 && itemIds.indexOf(x.itemId) >= 0 &&
+    (received[x.id] || 0) < x.qtyBuy * (x.buyUnitQty || 1));
+  return l ? open[l.orderId] : null;
 }
 
 // דיווחים שנשארו על הפרויקט (בלי מה שבוטל)
@@ -1376,7 +1396,16 @@ function resolveUnknown_(id, itemId, actor) {
   const mv = Db.byId('Movements', uk.movementId);
   if (mv) {
     const flags = String(mv.flags || '').split(',').filter(f => f && f !== 'unknown');
-    Db.update('Movements', mv.id, { itemId, flags: flags.join(',') });
+    const patch = { itemId, flags: flags.join(',') };
+    if (mv.type === 'count') {
+      // בספירה נכנסה כל הכמות (לא היה למה להשוות). עכשיו כשיודעים מה הפריט –
+      // מה שנספר מחליף את מה שהיה רשום במקום, ולא מתווסף עליו
+      const at = mv.to !== 'X' ? mv.to : mv.from;
+      const counted = mv.to !== 'X' ? mv.qty : 0;
+      const diff = counted - Model.qtyAt(itemId, at);
+      Object.assign(patch, { qty: Math.abs(diff), from: diff < 0 ? at : 'X', to: diff < 0 ? 'X' : at });
+    }
+    Db.update('Movements', mv.id, patch);
   }
   Db.update('UnknownItems', id, { status: 'linked', itemId });
   log_(actor, 'link', 'UnknownItems', id, '"' + uk.text + '" ← ' + it.name);
@@ -1615,6 +1644,12 @@ function fieldBootstrap_(me) {
   const openOrders = Db.all('Orders').filter(o => o.status === 'sent' || o.status === 'partial');
   const openOrderIds = openOrders.map(o => o.id);
   const received = Model.receivedByLine();
+  // מי קלט אחרון כל שורה (כדי שעובד אחר יראה שמישהו כבר התחיל)
+  const lastRecv = {};
+  const reversed = Model.reversedIds_();
+  Db.all('Movements').forEach(m => {
+    if (m.type === 'receive' && m.orderLineId && !reversed[m.id]) lastRecv[m.orderLineId] = { by: m.byPersonId, at: m.clientAt || m.at };
+  });
   return {
     me: { id: me.id, name: me.name, role: me.role },
     items: pick(Db.all('Items'), ['id', 'parentId', 'name', 'kind', 'unitId', 'buyUnitName', 'buyUnitQty', 'aliases', 'imageId', 'sort', 'isFolder']),
@@ -1628,6 +1663,7 @@ function fieldBootstrap_(me) {
     orders: pick(openOrders, ['id', 'number', 'supplierId', 'destId', 'status']),
     orderLines: Db.all('OrderLines').filter(l => openOrderIds.indexOf(l.orderId) >= 0 && l.qtyBuy > 0)
       .map(l => ({ id: l.id, orderId: l.orderId, itemId: l.itemId, qtyBuy: l.qtyBuy, buyUnitQty: l.buyUnitQty, received: received[l.id] || 0,
+        lastBy: (lastRecv[l.id] || {}).by || '', lastAt: (lastRecv[l.id] || {}).at || '',
         destId: l.destId || (openOrders.find(o => o.id === l.orderId) || {}).destId })),
     personal: fieldPersonal_(me),
     serverTime: now_(),
