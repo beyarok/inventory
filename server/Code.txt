@@ -84,6 +84,9 @@ const MOVE_TYPES = {
 };
 
 // הודעות שגיאה למשתמש. הנוסח הסופי מגיע מלשונית "טקסטים לאישור" במסמך התכנון.
+// אחרי סגירת פרויקט: עוד כמה ימים אפשר להחזיר עליו עודפים (והעלות שלו יורדת)
+const RETURN_AFTER_CLOSE_DAYS = 30;
+
 const MSG = {
   generic: 'לא הצלחתי לשמור. נסה שוב בעוד רגע.',
   badLink: 'הקישור הזה כבר לא פעיל. צריך לבקש קישור חדש מהמנהל.',
@@ -480,8 +483,12 @@ const Model = (() => {
   // "משכתי": מתכלה שהעובד משך לפרויקטים פתוחים, פחות עודפים שהחזיר
   function pullsOf(personId) {
     const reversed = reversedIds_();
+    // פרויקטים פתוחים, וגם כאלה שנסגרו לאחרונה – כדי שאפשר יהיה להחזיר עליהם עודפים
     const openProjects = {};
-    Db.all('Projects').forEach(p => { if (p.status === 'open') openProjects[p.id] = true; });
+    const since = Date.now() - RETURN_AFTER_CLOSE_DAYS * 86400000;
+    Db.all('Projects').forEach(p => {
+      if (p.status === 'open' || (p.status === 'closed' && Date.parse(p.closedAt) >= since)) openProjects[p.id] = true;
+    });
     const groups = {};
     Db.all('Movements').forEach(m => {
       if (m.byPersonId !== personId || reversed[m.id] || !openProjects[m.projectId] || !m.itemId) return;
@@ -690,7 +697,8 @@ function recordMovement_(inp, actor, isAdmin) {
   } else if (needsProject) {
     const pr = Db.byId('Projects', m.projectId);
     if (!pr || pr.archived) userError_(MSG.missing + 'פרויקט');
-    if (pr.status !== 'open') userError_('הפרויקט הזה סגור');
+    // החזרת עודף מותרת גם לפרויקט סגור – העלות שלו יורדת, והוא נשאר סגור
+    if (pr.status !== 'open' && type !== 'return_surplus') userError_('הפרויקט הזה סגור');
   }
   if (type === 'pull' && !unknown && Model.kindOf(m.itemId) === 'tool') {
     userError_('כלי לא נמשך לפרויקט. כדי לקחת כלי משתמשים ב"לקחתי" כהעברה אליך.');
@@ -1681,7 +1689,11 @@ function fieldPersonal_(me) {
   }
   return {
     tools: Model.heldBy('P:' + me.id),
-    pulls: Model.pullsOf(me.id),
+    // שם הפרויקט מגיע עם המשיכה (גם פרויקט שנסגר – לא מופיע ברשימת הפרויקטים לבחירה)
+    pulls: Model.pullsOf(me.id).map(p => {
+      const pr = Db.byId('Projects', p.projectId) || {};
+      return Object.assign({}, p, { projectName: pr.name || '', closed: pr.status === 'closed' });
+    }),
     recentItemIds: recent,
   };
 }

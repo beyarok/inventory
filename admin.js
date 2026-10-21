@@ -624,7 +624,8 @@
   // "משך לפרויקטים פתוחים" – אותו חישוב כמו בשרת
   function pullsOf(personId) {
     const open = {};
-    A.d.tables.Projects.forEach(p => { if (p.status === 'open') open[p.id] = true; });
+    const since = Date.now() - 30 * 86400000; // כמו RETURN_AFTER_CLOSE_DAYS בשרת
+    A.d.tables.Projects.forEach(p => { if (p.status === 'open' || (p.status === 'closed' && Date.parse(p.closedAt) >= since)) open[p.id] = true; });
     const g = {};
     A.d.tables.Movements.forEach(m => {
       if (m.byPersonId !== personId || A.ix.reversed[m.id] || !open[m.projectId] || !m.itemId) return;

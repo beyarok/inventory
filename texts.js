@@ -24,6 +24,7 @@ window.T = {
     },
     recent: 'אחרונים שלי',
     bkFrom: 'מאיפה?',
+    closedTag: '(סגור)',
     bkMeSub: 'מה שרשום עליי',
     bkLast: 'בפעם הקודמת',
     bkProducts: 'מוצרים',

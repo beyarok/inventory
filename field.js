@@ -146,7 +146,9 @@
   function myTools() { return (S.data.personal.tools || []).filter(t => item(t.itemId)); }
   // כמה דברים רשומים על העובד: כלים לפי כמות, מתכלה – פריט אחד לכל סוג
   function heldCount() { return myTools().reduce((s, t) => s + (kindOf(t.itemId) === 'tool' ? t.qty : 1), 0); }
-  function myPulls() { return (S.data.personal.pulls || []).filter(p => item(p.itemId) && S.ix.projects[p.projectId]); }
+  function myPulls() { return (S.data.personal.pulls || []).filter(p => item(p.itemId) && (S.ix.projects[p.projectId] || p.projectName)); }
+  // שם הפרויקט של משיכה (גם פרויקט שנסגר לאחרונה)
+  const pullProject = p => ((S.ix.projects[p.projectId] || {}).name || p.projectName || '') + (p.closed ? ' ' + TX.closedTag : '');
 
   // ---------- ניווט ----------
   const stack = [{ v: 'home' }];
@@ -207,7 +209,7 @@
     const pulls = myPulls().length;
     const tools = heldCount();
     const recents = (d.personal.recentItemIds || []).filter(id => item(id) && isLeaf(id)).slice(0, 5);
-    const act = a => '<button class="act" data-a="action" data-action="' + a + '">' + ICON[a] + esc(TX.actions[a]) + '</button>';
+    const act = a => '<button class="act' + (BK_ACTIONS.indexOf(a) < 0 ? ' quiet' : '') + '" data-a="action" data-action="' + a + '">' + ICON[a] + esc(TX.actions[a]) + '</button>';
     return top(fmt(TX.hello, { name: d.me.name }), false) + '<main class="body">' + banners() +
       '<button class="mycard" data-a="mine">' + ICON.user + '<span class="grow"><div class="t">' + esc(TX.myCard) + '</div>' +
       '<div class="s">' + esc(pulls || tools ? fmt(TX.myCardLine, { pulls, tools }) : TX.myCardEmpty) + '</div></span>' + ICON.chevron + '</button>' +
@@ -248,7 +250,7 @@
       const rows = myTools().map(t => itemRow(t.itemId, { a, qty: qtyLabel(t.qty, t.itemId), extra: ' data-held="1"' }));
       if (v.action === 'return') {
         myPulls().forEach(p => rows.push(itemRow(p.itemId, {
-          a, qty: qtyLabel(p.qty, p.itemId), sub: S.ix.projects[p.projectId].name,
+          a, qty: qtyLabel(p.qty, p.itemId), sub: pullProject(p),
           extra: ' data-project="' + p.projectId + '"',
         })));
       }
@@ -573,7 +575,7 @@
       h += '<div class="tiles' + (fid ? ' sub' : '') + '">' + folders.map(f => {
         const under = leavesUnder(f.id);
         const picked = under.filter(id => bkPickedQty(id) > 0).length;
-        return '<button class="tile" data-a="bkOpen" data-id="' + f.id + '">' + (picked ? '<span class="picked">' + esc(fmt(TX.bkPicked, { n: picked })) + '</span>' : '') +
+        return '<button class="tile' + (picked ? ' has' : '') + '" data-a="bkOpen" data-id="' + f.id + '">' + (picked ? '<span class="picked">' + esc(fmt(TX.bkPicked, { n: picked })) + '</span>' : '') +
           '<span class="nm">' + esc(f.name) + '</span><span class="ct">' + esc(fmt(TX.bkItems, { n: under.length })) + '</span></button>';
       }).join('') + '</div>';
     }
@@ -590,7 +592,7 @@
   function bkMineHtml() {
     const rows = myTools().map(t => bkRow(t.itemId, { sub: fmt(TX.bkOnYou, { n: qtyLabel(t.qty, t.itemId) }), extra: ' data-held="1"' }));
     myPulls().forEach(p => rows.push(bkRow(p.itemId, {
-      sub: fmt(TX.bkPulledFor, { n: qtyLabel(p.qty, p.itemId), project: S.ix.projects[p.projectId].name }), extra: ' data-project="' + p.projectId + '"',
+      sub: fmt(TX.bkPulledFor, { n: qtyLabel(p.qty, p.itemId), project: pullProject(p) }), extra: ' data-project="' + p.projectId + '"',
     })));
     return rows.length ? '<div class="list blist">' + rows.join('') + '</div>' : '<div class="empty">' + esc(TX.bkMineEmpty) + '</div>';
   }
@@ -855,7 +857,7 @@
       const byProject = {};
       pulls.forEach(p => { (byProject[p.projectId] = byProject[p.projectId] || []).push(p); });
       Object.keys(byProject).forEach(pid => {
-        h += '<div class="group">' + esc(S.ix.projects[pid].name) + '</div><div class="list">' +
+        h += '<div class="group">' + esc(pullProject(byProject[pid][0])) + '</div><div class="list">' +
           byProject[pid].map(p => '<div class="row"><span class="grow"><div class="name">' + esc(displayName(p.itemId)) + '</div>' +
             '<div class="sub">' + esc(fmt(TX.pullLine, { date: relDate(p.lastAt), from: holderName(p.lastFrom) })) + '</div></span>' +
             '<span class="qty">' + esc(qtyLabel(p.qty, p.itemId)) + '</span>' +
@@ -1305,7 +1307,8 @@
     let projectId = '';
     if (s.project) {
       const chips = projectChips(s.from ? v.from : '');
-      projectId = v.projectId === '_other' ? '_other' : chips.length === 1 ? chips[0].h : v.projectId;
+      // החזרת עודף – תמיד לפרויקט שממנו נמשך (גם אם נסגר בינתיים)
+      projectId = v.projectId === '_other' ? '_other' : s.type === 'return_surplus' && v.projectId ? v.projectId : chips.length === 1 ? chips[0].h : v.projectId;
       if (!projectId) return fail(fmt(TX.missing, { field: TX.project }));
       if (projectId === '_other' && !String(v.projectNote || '').trim()) return fail(fmt(TX.missing, { field: TX.otherProjectQ }));
     }
