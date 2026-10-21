@@ -248,3 +248,22 @@ input { font: inherit; }
 #app.bb .body { padding-bottom: 20px; }
 #app.bb .toast { bottom: 96px; }
 .grid.two .act { min-height: 92px; font-size: 17px; }
+
+/* ---- עיצוב: משפחות כמו תאי אחסון במחסן (פס חום בראש = שפת התא) ---- */
+.tile { border: 0; border-radius: 6px 6px 16px 16px; background: var(--beige); padding: 22px 14px 12px; box-shadow: inset 0 0 0 1px var(--line); overflow: hidden; }
+.tile::before { content: ''; position: absolute; top: 0; right: 0; left: 0; height: 8px; background: var(--brown); }
+.tile .nm { font-size: 21px; font-weight: 800; letter-spacing: -0.01em; }
+.tile .ct { font-size: 14px; }
+.tile.has::before { background: var(--leaf); }
+.tile .picked { top: 16px; }
+.tiles.sub .tile { padding-top: 18px; }
+.tiles.sub .tile::before { height: 6px; }
+/* בית: היררכיה */
+.act { font-weight: 700; }
+.act.quiet { background: var(--beige); color: var(--brown); }
+.act.quiet:active { background: #E9E1D5; }
+/* כמות: כפתורים גדולים לאגודל (גם עם כפפות) */
+.bbar ~ * .stepper button, #app.bb .stepper button { width: 64px; height: 64px; border-radius: 18px; font-size: 32px; font-weight: 700; }
+#app.bb .stepper input { width: 120px; height: 64px; font-size: 30px; font-weight: 800; border-width: 2px; border-radius: 16px; }
+#app.bb .qlabel { font-size: 17px; }
+.top h1 { font-weight: 700; }
