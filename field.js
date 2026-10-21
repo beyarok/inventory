@@ -30,6 +30,7 @@
     leaf: svg('<path d="M5 19c0-8 5-13 14-14 0 9-5 14-13 14"/><path d="M5 19c3-4 6-7 10-9"/>'),
     user: svg('<circle cx="9" cy="8" r="4"/><path d="M3 20c0-3 3-6 6-6s6 3 6 6"/><path d="M16 11l2 2 4-4"/>'),
     check: svg('<path d="M5 12l5 5L20 7"/>'),
+    home: svg('<path d="M3 10l9-6 9 6v10H3z"/><path d="M8 20v-6h8v6"/>'),
     cloud: svg('<path d="M7 18a4 4 0 0 1-.5-8A6 6 0 0 1 18 9a4 4 0 0 1 0 9z"/><path d="M12 12v6"/><path d="M9 15l3-3 3 3"/>'),
   };
 
@@ -46,6 +47,7 @@
     flushing: false,
     toast: null,
     fatal: null,
+    bk: null, // רשימה פתוחה: { action, from, items: [...] }
   };
   const key = n => (window.STORE_PREFIX || 'inv:') + n + ':' + S.token;
   const store = {
@@ -209,7 +211,9 @@
     return top(fmt(TX.hello, { name: d.me.name }), false) + '<main class="body">' + banners() +
       '<button class="mycard" data-a="mine">' + ICON.user + '<span class="grow"><div class="t">' + esc(TX.myCard) + '</div>' +
       '<div class="s">' + esc(pulls || tools ? fmt(TX.myCardLine, { pulls, tools }) : TX.myCardEmpty) + '</div></span>' + ICON.chevron + '</button>' +
-      '<div class="grid">' + ['take', 'return', 'transfer', 'receive', 'broken', 'more'].map(act).join('') + '</div>' +
+      (S.bk && S.bk.items.length ? '<div class="banner warn"><span class="grow">' + esc(fmt(TX.bkPending, { action: TX.actions[S.bk.action], n: S.bk.items.length })) + '</span>' +
+        '<button data-a="bkContinue">' + esc(TX.bkContinue) + '</button><button data-a="bkDiscard">' + esc(TX.bkDiscard) + '</button></div>' : '') +
+      '<div class="grid two">' + ['take', 'transfer', 'return', 'broken', 'receive', 'more'].map(act).join('') + '</div>' +
       (recents.length ? '<div class="label">' + esc(TX.recent) + '</div><div class="list">' +
         recents.map(id => itemRow(id, { a: 'card' })).join('') + '</div>' : '') +
       '<button class="search" data-a="search">' + ICON.search + '<span class="hint" style="font-size:16px">' + esc(TX.search) + '</span></button>' +
@@ -506,6 +510,179 @@
     return it && it.buyUnitName && Number(it.buyUnitQty) > 1 ? Number(it.buyUnitQty) : 1;
   }
 
+  // ---------- מסלול "רשימה": פעולה → מאיפה (פעם אחת) → משפחות → מוצר (כמה + לאן) → עוד מוצרים → סיכום → שלח ----------
+  // ארבע הפעולות היומיומיות. מוצר אחרי מוצר בלי לחזור כל פעם להתחלה.
+  const BK_ACTIONS = ['take', 'transfer', 'return', 'broken'];
+  const BK_FROM = { take: 'wh', transfer: 'wh', return: 'me', broken: 'whme' };
+  const bkKey = (itemId, projectId) => itemId + '|' + (projectId || '');
+  function bkSave() { store.set('basket', S.bk && S.bk.items.length ? S.bk : null); }
+  const bkEntry = (itemId, projectId) => S.bk && S.bk.items.find(e => e.k === bkKey(itemId, projectId));
+  const bkPickedQty = itemId => (S.bk ? S.bk.items.filter(e => e.itemId === itemId).reduce((t, e) => t + e.qty, 0) : 0);
+  function bkFromOptions(action, itemId) {
+    const out = locChips(STOCK_TYPES, itemId);
+    if (BK_FROM[action] === 'whme') out.push(chip(me(), TX.me, itemId ? qtyAt(itemId, me()) : undefined));
+    return out;
+  }
+  // כל המוצרים שמתחת לתיקייה
+  function leavesUnder(fid) {
+    const out = [];
+    const walk = pid => (S.ix.children[pid] || []).forEach(c => (isLeaf(c.id) ? out.push(c.id) : walk(c.id)));
+    walk(fid || '');
+    return out;
+  }
+  const bkBar = () => {
+    const n = S.bk ? S.bk.items.length : 0;
+    return '<div class="bbar"><button class="finish" data-a="bkSummary"' + (n ? '' : ' disabled') + '>' +
+      (n ? esc(TX.bkFinish) + ' <span class="n">' + n + '</span>' : esc(TX.bkEmptyBar)) + '</button></div>';
+  };
+
+  // שלב 1: מאיפה – פעם אחת לכל הרשימה
+  VIEWS.bfrom = v => {
+    const last = store.get('lastFrom:' + S.bk.action, '');
+    return top(TX.actions[S.bk.action], true) + '<main class="body"><div class="qlabel">' + esc(TX.bkFrom) + '</div><div class="places">' +
+      bkFromOptions(S.bk.action, v.itemId).map(c => '<button class="place' + (c.h === last ? ' last' : '') + '" data-a="bkFrom" data-h="' + esc(c.h) + '">' +
+        (c.h === me() ? ICON.user : ICON.home) + '<span class="grow">' + esc(c.label) +
+        (c.h === me() ? '<span class="sub">' + esc(TX.bkMeSub) + '</span>' : v.itemId ? '<span class="sub">' + esc(fmt(TX.bkHave, { n: qtyLabel(c.n || 0, v.itemId) })) + '</span>' : '') + '</span>' +
+        (c.h === last ? '<span class="tag">' + esc(TX.bkLast) + '</span>' : '') + '</button>').join('') +
+      '</div></main>';
+  };
+
+  // שלב 2: משפחות → תתי-משפחות → מוצרים (חיפוש תמיד למעלה)
+  function bkCrumbs(fid) {
+    const path = [];
+    let it = item(fid);
+    while (it) { path.unshift(it); it = item(it.parentId); }
+    return '<div class="bcrumbs"><b>' + esc(holderName(S.bk.from)) + '</b>' + path.map((f, i) => '<span class="sep">›</span>' +
+      (i < path.length - 1 ? '<button data-a="bkJump" data-id="' + f.id + '">' + esc(f.name) + '</button>' : '<b>' + esc(f.name) + '</b>')).join('') + '</div>';
+  }
+  function bkRow(id, opts) {
+    opts = opts || {};
+    const have = qtyAt(id, S.bk.from);
+    const picked = bkPickedQty(id);
+    return '<button class="row brow' + (picked ? ' picked' : '') + '" data-a="bkItem" data-id="' + id + '"' + (opts.extra || '') + '><span class="grow">' +
+      '<div class="name">' + esc(opts.short ? item(id).name : displayName(id)) + '</div>' +
+      '<div class="sub' + (have || opts.sub ? '' : ' zero') + '">' + esc(opts.sub || (have ? fmt(TX.bkHave, { n: qtyLabel(have, id) }) : TX.bkNone)) + '</div></span>' +
+      (picked ? '<span class="badge">' + esc(fmt(TX.bkPickedOne, { n: qtyLabel(picked, id) })) + '</span>' : ICON.chevron) + '</button>';
+  }
+  function bkCatHtml(fid) {
+    const kids = S.ix.children[fid || ''] || [];
+    const folders = kids.filter(c => !isLeaf(c.id) && leavesUnder(c.id).length);
+    const leaves = kids.filter(c => isLeaf(c.id));
+    let h = '';
+    if (folders.length) {
+      h += '<div class="tiles' + (fid ? ' sub' : '') + '">' + folders.map(f => {
+        const under = leavesUnder(f.id);
+        const picked = under.filter(id => bkPickedQty(id) > 0).length;
+        return '<button class="tile" data-a="bkOpen" data-id="' + f.id + '">' + (picked ? '<span class="picked">' + esc(fmt(TX.bkPicked, { n: picked })) + '</span>' : '') +
+          '<span class="nm">' + esc(f.name) + '</span><span class="ct">' + esc(fmt(TX.bkItems, { n: under.length })) + '</span></button>';
+      }).join('') + '</div>';
+    }
+    if (leaves.length) h += (folders.length ? '<div class="qlabel" style="margin-top:6px">' + esc(TX.bkProducts) + '</div>' : '') +
+      '<div class="list blist">' + leaves.map(c => bkRow(c.id, { short: true })).join('') + '</div>';
+    return h || '<div class="empty">' + esc(TX.bkNothingHere) + '</div>';
+  }
+  function bkSearchHtml(q) {
+    const words = norm(q).split(' ').filter(Boolean);
+    const hits = S.ix.leaves.filter(i => words.every(w => S.ix.search[i.id].indexOf(w) >= 0)).slice(0, 40);
+    return hits.length ? '<div class="list blist">' + hits.map(i => bkRow(i.id)).join('') + '</div>' : '<div class="empty">' + esc(fmt(TX.noResults, { q })) + '</div>';
+  }
+  // "החזרה למחסן": רק מה שרשום על העובד – כלים, מתכלה שהועבר אליו, ומה שמשך לפרויקטים
+  function bkMineHtml() {
+    const rows = myTools().map(t => bkRow(t.itemId, { sub: fmt(TX.bkOnYou, { n: qtyLabel(t.qty, t.itemId) }), extra: ' data-held="1"' }));
+    myPulls().forEach(p => rows.push(bkRow(p.itemId, {
+      sub: fmt(TX.bkPulledFor, { n: qtyLabel(p.qty, p.itemId), project: S.ix.projects[p.projectId].name }), extra: ' data-project="' + p.projectId + '"',
+    })));
+    return rows.length ? '<div class="list blist">' + rows.join('') + '</div>' : '<div class="empty">' + esc(TX.bkMineEmpty) + '</div>';
+  }
+  VIEWS.bcat = v => {
+    const fid = v.fid || '';
+    const title = fid ? item(fid).name : TX.actions[S.bk.action];
+    const mine = S.bk.action === 'return';
+    return top(title, true) + (mine ? '' : bkCrumbs(fid)) + '<main class="body">' +
+      (mine ? '' : '<label class="search">' + ICON.search + '<input id="bq" type="search" autocomplete="off" placeholder="' + esc(TX.search) + '" value="' + esc(v.q || '') + '"></label>') +
+      '<div id="bres">' + (mine ? bkMineHtml() : v.q ? bkSearchHtml(v.q) : bkCatHtml(fid)) + '</div>' +
+      (S.bk.action === 'take' ? '<button class="link" data-a="unknown">' + esc(TX.unknownLink) + '</button>' : '') +
+      '</main>' + bkBar();
+  };
+
+  // שלב 3: מוצר – כמה, ולאן / לאיזה פרויקט / מה קרה. לא שואלים שוב מאיפה.
+  function bkInit(v) {
+    if (v.init) return;
+    v.init = true;
+    v.action = S.bk.action;
+    v.from = S.bk.from;
+    const e = bkEntry(v.itemId, v.projectId);
+    if (e) { Object.assign(v, { qty: e.typed, unitMode: e.unitMode, to: e.to, projectId: e.projectId, projectNote: e.projectNote, what: e.what, held: e.held }); return; }
+    v.qty = 1;
+    v.unitMode = buyPer(v.itemId) > 1 ? 'buy' : 'stock';
+    const max = myMax(v, v.projectId);
+    if (v.unitMode === 'buy' && max !== null && max % buyPer(v.itemId) !== 0) v.unitMode = 'stock';
+    const lastTo = store.get('lastTo:' + v.action, '');
+    if (bkToChips(v).some(c => c.h === lastTo)) v.to = lastTo;
+    v.what = store.get('lastWhat', 'broken');
+    if (v.action === 'take') autoProject(v);
+  }
+  const bkToChips = v => locChips(STOCK_TYPES).filter(c => c.h !== v.from);
+  const bkIsTool = v => kindOf(v.itemId) === 'tool';
+  VIEWS.bitem = v => {
+    bkInit(v);
+    const id = v.itemId;
+    const editing = !!bkEntry(id, v.projectId);
+    const max = myMax(v, v.projectId);
+    const haveAt = v.action === 'return' ? null : qtyAt(id, v.from);
+    let h = top(TX.actions[v.action], true) + '<main class="body">' +
+      '<div class="path">' + esc(pathNames(id).join(' › ')) + '</div><div class="iname">' + esc(displayName(id)) + '</div>' +
+      (haveAt !== null ? '<span class="have">' + esc(fmt(TX.bkHaveAt, { place: holderName(v.from), n: qtyLabel(haveAt, id) })) + '</span>' : '') +
+      '<div class="field"><div class="qlabel">' + esc(TX.qty) + '</div>' + stepper(v, unitName(id)) +
+      (max !== null ? '<div class="hint" style="text-align:center">' + esc(fmt(v.projectId ? TX.youPulled : TX.youHave, { n: qtyLabel(max, id) })) + '</div>' : '') + '</div>';
+    if (v.action === 'take') {
+      if (bkIsTool(v)) h += '<div class="hint" style="font-size:15px">' + esc(TX.bkToolMe) + '</div>';
+      else {
+        const chips = projectChips(v.from);
+        const cont = S.ix.locs[v.from.slice(2)];
+        if (chips.length === 1 && cont && (cont.type === 'container' || cont.type === 'cart') && v.projectId !== '_other') {
+          h += '<div class="field"><div class="qlabel">' + esc(TX.project) + '</div><div class="hint" style="font-size:15px">' +
+            esc(fmt(TX.projectAuto, { project: chips[0].label, container: cont.name })) + '</div>' +
+            '<button class="link" data-a="chip" data-field="projectId" data-v="_other" style="padding:4px 0;text-align:right">' + esc(TX.otherProjectLink) + '</button></div>';
+        } else {
+          const all = chips.concat([chip('_other', TX.otherProject)]);
+          h += '<div class="field"><div class="qlabel">' + esc(TX.project) + '</div>' +
+            (chips.length > 4 ? projectListHtml(all, v.projectId) : chipsHtml('projectId', all, v.projectId)) +
+            (v.projectId === '_other' ? '<input id="projNote" class="text" maxlength="120" style="margin-top:8px" placeholder="' + esc(TX.otherProjectQ) + '" value="' + esc(v.projectNote || '') + '">' : '') + '</div>';
+        }
+      }
+    } else if (v.action === 'transfer' || v.action === 'return') {
+      h += '<div class="field"><div class="qlabel">' + esc(TX.bkToWh) + '</div>' + chipsHtml('to', bkToChips(v), v.to) + '</div>';
+    } else if (v.action === 'broken') {
+      h += '<div class="field"><div class="qlabel">' + esc(TX.brokenQ) + '</div>' + chipsHtml('what', [chip('broken', TX.brokenOpt), chip('lost', TX.lostOpt)], v.what) + '</div>';
+    }
+    h += (editing ? '<button class="link danger" data-a="bkRemove">' + esc(TX.bkRemove) + '</button>' : '') +
+      '<div id="err" class="error">' + esc(v.err || '') + '</div></main>' +
+      '<div class="bbar"><button class="addbtn" data-a="bkAdd">' + ICON.check + esc(editing ? TX.bkUpdate : TX.bkAdd) + '</button></div>';
+    return h;
+  };
+
+  // שלב 4: סיכום לפני שליחה – אפשר לתקן או להוציא
+  function bkDest(e) {
+    if (S.bk.action === 'take') return e.projectId === '_other' ? e.projectNote : e.projectId ? (S.ix.projects[e.projectId] || {}).name : TX.bkToolShort;
+    if (S.bk.action === 'broken') return e.what === 'lost' ? TX.lostOpt : TX.brokenOpt;
+    return holderName(e.to);
+  }
+  VIEWS.bsum = v => {
+    const bk = S.bk;
+    const n = bk.items.length;
+    return top(TX.bkSummary, true) + '<main class="body">' +
+      '<div class="sumhead">' + esc(fmt(bk.action === 'return' ? TX.bkSumHeadMine : TX.bkSumHead, { action: TX.actions[bk.action], from: holderName(bk.from), n })) + '</div>' +
+      (n ? '<div class="list sumlist">' + bk.items.map((e, i) => '<div class="sumrow"><button class="grow" data-a="bkEdit" data-i="' + i + '">' +
+        '<div class="name">' + esc(displayName(e.itemId)) + '</div><div class="sub">' + esc((bk.action === 'broken' ? '' : '← ') + bkDest(e)) + '</div></button>' +
+        '<span class="q">' + esc(e.label) + '</span><button class="x" data-a="bkDel" data-i="' + i + '" aria-label="' + esc(TX.bkRemove) + '">✕</button></div>').join('') + '</div>' +
+        '<div class="hint">' + esc(TX.bkEditHint) + '</div>' : '<div class="empty">' + esc(TX.bkEmptyList) + '</div>') +
+      (bk.action === 'broken' ? photosHtml(v) : '') +
+      '<div id="err" class="error"></div></main>' +
+      '<div class="bbar"><button class="finish" data-a="bkSend"' + (n ? '' : ' disabled') + '>' + esc(fmt(TX.bkSend, { n })) + '</button>' +
+      '<button class="link" data-a="back" style="width:100%">' + esc(TX.bkMore) + '</button></div>';
+  };
+
   // ---------- קבלת סחורה ----------
   VIEWS.receive = () => {
     // הזמנה לכמה מחסנים – שורה לכל מחסן; כל עובד בוחר את המחסן שאליו הסחורה הגיעה
@@ -717,7 +894,9 @@
     if (S.fatal) { app.innerHTML = VIEWS.message({ text: S.fatal }); return; }
     if (!S.data) { app.innerHTML = VIEWS.message({ text: TX.loading }); return; }
     const v = cur();
-    app.innerHTML = (VIEWS[v.v] || VIEWS.home)(v) + toastHtml();
+    const html = (VIEWS[v.v] || VIEWS.home)(v);
+    app.innerHTML = html + toastHtml();
+    app.classList.toggle('bb', html.indexOf('class="bbar"') >= 0);
   }
 
   function toastHtml() {
@@ -807,7 +986,153 @@
     enqueue(ms, missing ? fmt(otherDests ? TX.receivedSomeDest : TX.receivedSome, { number: o.number, n: missing, place })
       : fmt(otherDests ? TX.receivedAllDest : TX.receivedAll, { number: o.number, place }));
   };
-  H.back = () => back();
+  // ---- מסלול "רשימה" ----
+  // מתחילים פעולה (מהבית, או מכרטיס פריט – אז המוצר נפתח מיד אחרי "מאיפה")
+  async function bkStart(action, itemId) {
+    if (S.bk && S.bk.items.length && S.bk.action !== action) {
+      if (!(await confirmBox(fmt(TX.bkReplace, { action: TX.actions[S.bk.action], n: S.bk.items.length }), TX.bkReplaceYes))) return;
+    }
+    if (!S.bk || S.bk.action !== action) S.bk = { action, from: '', items: [] };
+    S.bk.pending = itemId || '';
+    if (BK_FROM[action] === 'me') {
+      S.bk.from = me();
+      bkSave();
+      return go({ v: 'bcat', fid: '', q: '' });
+    }
+    // יש כבר רשימה פתוחה מאותו מקום – ממשיכים ממנה
+    if (S.bk.items.length && S.bk.from) return bkAfterFrom();
+    const opts = bkFromOptions(action, itemId);
+    if (opts.length === 1) { S.bk.from = opts[0].h; return bkAfterFrom(); }
+    go({ v: 'bfrom', itemId: itemId || '' });
+  }
+  function bkAfterFrom() {
+    bkSave();
+    const p = S.bk.pending;
+    S.bk.pending = '';
+    go({ v: 'bcat', fid: '', q: '' });
+    if (p) go({ v: 'bitem', itemId: p });
+  }
+  H.bkFrom = el => {
+    S.bk.from = el.dataset.h;
+    store.set('lastFrom:' + S.bk.action, S.bk.from);
+    // "מאיפה" נשאל פעם אחת: אחרי הבחירה המסך שלו יוצא מההיסטוריה
+    stack.pop();
+    stack.push({ v: 'bcat', fid: '', q: '' });
+    history.replaceState({ n: stack.length }, '');
+    bkSave();
+    render();
+    if (S.bk.pending) { const p = S.bk.pending; S.bk.pending = ''; go({ v: 'bitem', itemId: p }); }
+  };
+  H.bkOpen = el => go({ v: 'bcat', fid: el.dataset.id, q: '' });
+  H.bkJump = el => {
+    const target = el.dataset.id;
+    const i = stack.map(x => x.v === 'bcat' && x.fid === target).lastIndexOf(true);
+    if (i < 0) return;
+    const n = stack.length - 1 - i;
+    if (n > 0) history.go(-n);
+  };
+  H.bkItem = el => go({ v: 'bitem', itemId: el.dataset.id, projectId: el.dataset.project || '', held: el.dataset.held === '1' });
+  H.bkEdit = el => {
+    const e = S.bk.items[Number(el.dataset.i)];
+    go({ v: 'bitem', itemId: e.itemId, projectId: S.bk.action === 'return' ? e.projectId : '', held: e.held });
+  };
+  H.bkDel = el => { S.bk.items.splice(Number(el.dataset.i), 1); bkSave(); render(); };
+  H.bkSummary = () => go({ v: 'bsum' });
+  // אחרי ✓ חוזרים צעד אחד – לקטגוריה שממנה נבחר המוצר
+  function bkBackWith(text, undoKey) {
+    S.toast = { kind: 'ok', text, undoKey };
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { S.toast = null; softRender(); }, 6000);
+    back();
+  }
+  H.bkRemove = () => {
+    const v = cur();
+    S.bk.items = S.bk.items.filter(e => e.k !== bkKey(v.itemId, v.action === 'return' ? v.projectId : ''));
+    bkSave();
+    bkBackWith(TX.bkRemoved);
+  };
+  H.bkAdd = async () => {
+    const v = cur();
+    readInputs(v);
+    const fail = msg => { v.err = msg; render(); };
+    const typed = parseInt(v.qty, 10);
+    if (!(typed > 0)) return fail(TX.qtyMissing);
+    const per = v.unitMode === 'buy' ? buyPer(v.itemId) : 1;
+    const qty = typed * per;
+    const tool = bkIsTool(v);
+    if (v.action === 'take' && !tool) {
+      if (!v.projectId) return fail(fmt(TX.missing, { field: TX.project }));
+      if (v.projectId === '_other' && !String(v.projectNote || '').trim()) return fail(fmt(TX.missing, { field: TX.otherProjectQ }));
+    }
+    if ((v.action === 'transfer' || v.action === 'return') && !v.to) return fail(fmt(TX.missing, { field: TX.bkToWh }));
+    // מה שרשום על העובד – לא יותר ממנו. ממחסן – רק אזהרה (המלאי במערכת לא תמיד מדויק)
+    const max = myMax(v, v.projectId);
+    const k = bkKey(v.itemId, v.action === 'return' ? v.projectId : '');
+    const others = S.bk.items.filter(e => e.itemId === v.itemId && e.k !== k).reduce((t, e) => t + e.qty, 0);
+    if (max !== null && qty + others > max) return fail(fmt(v.projectId && v.action === 'return' ? TX.youPulled : TX.overMine, { n: qtyLabel(max - others, v.itemId) }));
+    if (max === null && v.from.indexOf('L:') === 0 && qtyAt(v.itemId, v.from) < qty + others) {
+      if (!(await confirmBox(fmt(TX.overdraw, { place: holderName(v.from), n: num(qtyAt(v.itemId, v.from)) }), TX.overdrawYes))) return;
+    }
+    const label = per > 1 ? num(typed) + ' ' + item(v.itemId).buyUnitName : qtyLabel(qty, v.itemId);
+    const e = {
+      k, itemId: v.itemId, typed, unitMode: v.unitMode, qty, label, to: v.to || '', held: !!v.held || (v.action === 'return' && !v.projectId),
+      projectId: v.action === 'take' && tool ? '' : v.projectId || '', projectNote: v.projectId === '_other' ? String(v.projectNote || '').trim() : '', what: v.what,
+    };
+    const old = bkEntry(v.itemId, v.action === 'return' ? v.projectId : '');
+    if (old) Object.assign(old, e); else S.bk.items.push(e);
+    if (e.to) store.set('lastTo:' + v.action, e.to);
+    if (e.projectId && e.projectId !== '_other') store.set('lastProject', e.projectId);
+    if (v.action === 'broken') store.set('lastWhat', e.what);
+    bkSave();
+    bkBackWith(fmt(old ? TX.bkUpdated : TX.bkAdded, { item: displayName(v.itemId), qty: label }), old ? '' : 'bk:' + k);
+  };
+  // יציאה מהמסלול כשיש מוצרים ברשימה – שואלים קודם
+  H.back = async () => {
+    const v = cur();
+    if (v.v === 'bcat' && !v.fid && S.bk && S.bk.items.length) {
+      if (!(await confirmBox(fmt(TX.bkLeave, { n: S.bk.items.length }), TX.bkLeaveYes))) return;
+      S.bk = null;
+      bkSave();
+    }
+    back();
+  };
+  H.bkContinue = () => bkStart(S.bk.action);
+  H.bkDiscard = async () => {
+    if (!(await confirmBox(fmt(TX.bkLeave, { n: S.bk.items.length }), TX.bkDiscardYes))) return;
+    S.bk = null;
+    bkSave();
+    render();
+  };
+  H.bkSend = async () => {
+    const v = cur();
+    const bk = S.bk;
+    const n = bk.items.length;
+    if (!n) return;
+    if (!(await confirmBox(fmt(TX.bkSendConfirm, { n }), TX.bkSendYes))) return;
+    const at = new Date().toISOString();
+    const ms = bk.items.map(e => {
+      const m = { clientKey: uuid(), clientAt: at, itemId: e.itemId, qty: e.qty, from: bk.from, to: '', projectId: '', projectNote: '', note: '', unknownText: '', supplierId: '' };
+      if (bk.action === 'take') {
+        if (kindOf(e.itemId) === 'tool') Object.assign(m, { type: 'transfer', to: me() });
+        else Object.assign(m, { type: 'pull', to: 'X', projectId: e.projectId, projectNote: e.projectNote });
+      } else if (bk.action === 'transfer') {
+        Object.assign(m, { type: 'transfer', to: e.to });
+      } else if (bk.action === 'return') {
+        // מה שנמשך לפרויקט חוזר כ"החזרת עודף" על אותו פרויקט – העלות של הפרויקט יורדת
+        if (e.projectId) Object.assign(m, { type: 'return_surplus', from: 'X', to: e.to, projectId: e.projectId });
+        else Object.assign(m, { type: 'transfer', from: me(), to: e.to });
+      } else {
+        Object.assign(m, { type: e.what === 'lost' ? 'lost' : 'broken', to: 'X' });
+      }
+      return m;
+    });
+    if (bk.action === 'broken') queueDoc(v, ms[0].clientKey, '', TX.docKinds.broken + ' · ' + bk.items.map(e => item(e.itemId).name).join(', ').slice(0, 80));
+    const label = fmt(TX.bkSent, { action: TX.actions[bk.action], n });
+    S.bk = null;
+    bkSave();
+    enqueue(ms, label);
+  };
+
   H.mine = () => go({ v: 'mine', tab: 'pulls' });
   H.tab = el => { cur().tab = el.dataset.tab; render(); };
   H.search = () => { go({ v: 'pick', action: null, q: '' }); focusQ(); };
@@ -818,6 +1143,7 @@
     const itemId = el.dataset.id;
     if (a === 'receive') return go({ v: 'receive' });
     if (a === 'more') return go({ v: 'more', itemId });
+    if (BK_ACTIONS.indexOf(a) >= 0) return bkStart(a, itemId);
     if (itemId) return go({ v: 'finish', action: a, itemId });
     go({ v: 'pick', action: a, q: '' });
   };
@@ -893,7 +1219,17 @@
     v.qtys[id] = Math.max(0, (Number(v.qtys[id]) || 0) + Number(el.dataset.d));
     render();
   };
-  H.undo = el => undo(el.dataset.key);
+  H.undo = el => {
+    const k = el.dataset.key;
+    // ביטול הוספה לרשימה (עוד לא נשלח כלום)
+    if (k.indexOf('bk:') === 0) {
+      if (S.bk) S.bk.items = S.bk.items.filter(e => e.k !== k.slice(3));
+      bkSave();
+      S.toast = null;
+      return render();
+    }
+    undo(k);
+  };
   H.send = () => sendFinish();
 
   function readInputs(v) {
@@ -921,6 +1257,12 @@
       const it = item(v.itemId);
       const n = parseInt(e.target.value, 10) || 0;
       document.getElementById('qtyConv').textContent = fmt(TX.unitEquals, { n: num(n), unit: it.buyUnitName, total: num(n * buyPer(v.itemId)), stockUnit: unitName(v.itemId) });
+      return;
+    }
+    if (e.target.id === 'bq') {
+      const v = cur();
+      v.q = e.target.value;
+      document.getElementById('bres').innerHTML = norm(v.q) ? bkSearchHtml(v.q) : bkCatHtml(v.fid);
       return;
     }
     if (e.target.id === 'q') {
@@ -1280,6 +1622,7 @@
 
   // ---------- הפעלה ----------
   function start() {
+    S.bk = store.get('basket', null);
     if (!S.token) { S.fatal = TX.noLink; render(); return; }
     history.replaceState({ n: 1 }, '');
     S.data = store.get('boot', null);

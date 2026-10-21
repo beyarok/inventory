@@ -198,3 +198,53 @@ input { font: inherit; }
 .recvrow.counted .name svg { width: 16px; height: 16px; color: #6A9A3A; vertical-align: middle; }
 .recvrow.counted.short { background: #FDF6EA; }
 .recvrow.counted.short .sub b { color: #854F0B; }
+
+/* מסלול "רשימה": מאיפה → משפחות → מוצר → סיכום */
+.qlabel { font-size: 16px; font-weight: 700; color: var(--brown); margin: 2px 2px 0; }
+.places { display: flex; flex-direction: column; gap: 10px; }
+.place { display: flex; align-items: center; gap: 12px; background: var(--beige); border: 2px solid transparent; border-radius: 16px; padding: 16px; font-size: 19px; font-weight: 700; color: var(--brown); text-align: right; width: 100%; }
+.place svg { width: 26px; height: 26px; }
+.place .grow { flex: 1; }
+.place .sub { display: block; font-size: 13px; font-weight: 400; color: var(--muted); }
+.place.last { border-color: var(--green); }
+.place .tag { font-size: 12px; font-weight: 600; color: var(--green-dark); }
+.bcrumbs { background: var(--beige); color: var(--brown); font-size: 14px; padding: 8px 16px; border-bottom: 1px solid var(--line); white-space: nowrap; overflow-x: auto; }
+.bcrumbs .sep { color: var(--muted); margin: 0 4px; }
+.bcrumbs button { color: var(--green-dark); text-decoration: underline; text-underline-offset: 3px; }
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.tile { position: relative; background: var(--beige); border: 1px solid var(--line); border-radius: 18px; min-height: 100px; padding: 14px; display: flex; flex-direction: column; justify-content: flex-end; text-align: right; }
+.tile:active { background: #E9E1D5; }
+.tile .nm { font-size: 20px; font-weight: 800; color: var(--brown); line-height: 1.15; }
+.tile .ct { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.tile .picked { position: absolute; top: 10px; left: 10px; background: var(--green); color: #fff; font-size: 12px; font-weight: 700; border-radius: 999px; padding: 2px 9px; }
+.tiles.sub .tile { min-height: 80px; }
+.tiles.sub .tile .nm { font-size: 18px; }
+.blist { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+.blist .row { padding: 13px 14px; }
+.blist .row:last-child { border-bottom: 0; }
+.brow .name { font-weight: 600; }
+.brow .sub.zero { color: #B0A090; }
+.brow.picked { background: #F4F8EE; }
+.badge { flex: none; background: var(--green); color: #fff; font-size: 13px; font-weight: 700; border-radius: 999px; padding: 4px 10px; white-space: nowrap; }
+.iname { font-size: 22px; font-weight: 800; color: var(--brown); line-height: 1.25; margin-top: -6px; }
+.have { align-self: flex-start; background: var(--beige); color: var(--brown); border-radius: 999px; padding: 4px 12px; font-size: 14px; }
+.link.danger { color: var(--danger); }
+.sumhead { background: var(--beige); border-radius: 14px; padding: 12px 14px; color: var(--brown); font-size: 15px; }
+.sumlist { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+.sumrow { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.sumrow:last-child { border-bottom: 0; }
+.sumrow .grow { flex: 1; min-width: 0; text-align: right; }
+.sumrow .name { font-weight: 600; }
+.sumrow .sub { font-size: 13px; color: var(--muted); }
+.sumrow .q { font-weight: 800; color: var(--brown); white-space: nowrap; }
+.sumrow .x { width: 36px; height: 36px; border-radius: 10px; color: var(--danger); font-size: 18px; }
+/* פס תחתון קבוע: סיום הפעולה / הוספת המוצר */
+.bbar { position: sticky; bottom: 0; z-index: 6; background: #fff; border-top: 1px solid var(--line); padding: 10px 16px calc(12px + env(safe-area-inset-bottom)); }
+.bbar .finish { width: 100%; min-height: 56px; border-radius: 16px; background: var(--brown); color: #fff; font-size: 19px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 10px; }
+.bbar .finish .n { background: var(--leaf); color: var(--brown); border-radius: 999px; min-width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; padding: 0 8px; }
+.bbar .finish:disabled { background: var(--beige); color: var(--muted); }
+.bbar .addbtn { width: 100%; min-height: 56px; border-radius: 16px; background: var(--green); color: #fff; font-size: 19px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.bbar .addbtn:active { background: var(--green-dark); }
+#app.bb .body { padding-bottom: 20px; }
+#app.bb .toast { bottom: 96px; }
+.grid.two .act { min-height: 92px; font-size: 17px; }
