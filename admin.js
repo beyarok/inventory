@@ -645,13 +645,13 @@
 
   VIEW.stock = () => {
     let h = '<h1>' + esc(TA.menu.stock) + '</h1><div class="btns" style="margin-bottom:12px">' +
-      seg('stockGroup', A.stockGroup, [['item', TA.byItem], ['place', TA.byPlace], ['person', TA.byPerson]]);
+      seg('stockGroup', A.stockGroup, [['item', TA.byItem], ['place', TA.byPlace], ['person', TA.byPerson]]) +
+      seg('stockCat', A.stockCat, [['flat', TA.stockFlat], ['cat', TA.stockByCat]]) +
+      (A.stockCat === 'cat' && !(A.stockGroup === 'item' && A.stockView === 'table') ? '<button class="btn sm" data-a="catAll" data-v="1">' + esc(TA.openAll) + '</button><button class="btn sm" data-a="catAll" data-v="0">' + esc(TA.closeAll) + '</button>' : '');
     if (A.stockGroup === 'item') {
       h += seg('stockView', A.stockView, [['bars', TA.viewBars], ['table', TA.viewTable]]) +
         seg('stockFilter', A.stockFilter, [['all', TA.fAll], ['below', TA.fBelow], ['consumable', TA.fConsumable], ['tool', TA.fTools]]) +
         (A.stockView === 'bars' ? seg('stockSort', A.stockSort, [['low', TA.sortLow], ['abc', TA.sortAbc]]) : '') +
-        seg('stockCat', A.stockCat, [['flat', TA.stockFlat], ['cat', TA.stockByCat]]) +
-        (A.stockCat === 'cat' && A.stockView === 'bars' ? '<button class="btn sm" data-a="catAll" data-v="1">' + esc(TA.openAll) + '</button><button class="btn sm" data-a="catAll" data-v="0">' + esc(TA.closeAll) + '</button>' : '') +
         '<input class="in" id="stockQ" style="max-width:220px" placeholder="' + esc(TA.searchItems) + '" value="' + esc(A.stockQ) + '">';
     }
     h += '</div><div id="stockBody">' + stockBody() + '</div>';
@@ -791,6 +791,38 @@
       }).join('') + '</table></div>';
   }
 
+  // מקום / עובד: כותרת לכל קטגוריה (הנתיב המלא), נפתחת/נסגרת, ברירת מחדל פתוחה
+  const catPathName = id => pathOf(id).map(p => p.name).join(' › ') || TA.noCategory;
+  const catKeyOf = id => { const p = pathOf(id); return p.length ? p[p.length - 1].id : '_none'; };
+  function catSortIds(ids) {
+    const k = id => pathOf(id).map(p => String(p.sort || 0).padStart(4, '0') + p.name).join('›') || '~';
+    return ids.slice().sort((a, b) => k(a).localeCompare(k(b), 'he', { numeric: true }) || displayName(a).localeCompare(displayName(b), 'he', { numeric: true }));
+  }
+  const nsOpen = key => (A.catOpen[key] !== undefined ? A.catOpen[key] : A.catOpen._nsDefault !== undefined ? A.catOpen._nsDefault : true);
+  // rows: [{id, html}] · table – מספר עמודות (שורות טבלה), אחרת div
+  function catGroups(rows, ns, tableCols) {
+    const ids = catSortIds(rows.map(r => r.id));
+    const byId = {};
+    rows.forEach(r => { (byId[r.id] = byId[r.id] || []).push(r.html); });
+    let h = '', last = null, open = true;
+    const counts = {};
+    ids.forEach(id => { const k = catKeyOf(id); counts[k] = (counts[k] || 0) + 1; });
+    ids.forEach(id => {
+      const k = catKeyOf(id);
+      if (k !== last) {
+        last = k;
+        const key = ns + ':' + k;
+        open = nsOpen(key);
+        const label = '<span class="chev">' + (open ? '▾' : '◂') + '</span><b>' + esc(catPathName(id)) + '</b> <span class="muted small">' + esc(counts[k] === 1 ? TA.catItem1 : fmt(TA.catItems, { n: counts[k] })) + '</span>';
+        h += tableCols ? '<tr class="catrow click" data-a="catToggle" data-id="' + key + '"><td colspan="' + tableCols + '">' + label + '</td></tr>'
+          : '<div class="cathead d0' + (open ? ' open' : '') + '" data-a="catToggle" data-id="' + key + '">' + label + '</div>';
+      }
+      if (open) h += byId[id].join('');
+      byId[id] = [];
+    });
+    return h;
+  }
+
   function stockByPlace() {
     const places = A.d.tables.Locations.filter(l => !l.archived);
     if (!A.stockPlace && places.length) A.stockPlace = 'L:' + places[0].id;
@@ -802,13 +834,15 @@
     const h = A.stockPlace;
     const rows = Object.keys(A.d.stock).filter(id => item(id) && (A.d.stock[id][h] || 0) !== 0)
       .sort((a, b) => displayName(a).localeCompare(displayName(b), 'he', { numeric: true }));
-    return cards + '<div class="box" style="padding:0"><table><tr><th>' + esc(TA.cItem) + '</th><th>' + esc(TA.cQty) + '</th><th>' + esc(TA.companyTotal) + '</th><th>' + esc(TA.fMin) + '</th><th></th></tr>' +
-      (rows.length ? rows.map(id => {
+    const placeRow = id => {
         const it = item(id);
         const w = warehouseQty(id);
         return '<tr' + (hasMin(it) && w < it.minQty ? ' class="lowrow"' : '') + '><td>' + esc(displayName(id)) + '</td><td><b>' + num(A.d.stock[id][h]) + '</b> ' + esc(unitLabel(id)) + '</td><td>' + num(w) +
           '</td><td>' + (hasMin(it) ? num(it.minQty) : '') + '</td><td><div class="btns"><button class="btn sm" data-a="setQty" data-id="' + id + '" data-place="' + h + '">' + esc(TA.setQty) + '</button><button class="btn sm" data-a="moveStock" data-id="' + id + '" data-from="' + h + '">' + esc(TA.moveStock) + '</button></div></td></tr>';
-      }).join('') : '<tr><td colspan="5" class="muted">' + esc(TA.nothing) + '</td></tr>') + '</table></div>';
+    };
+    return cards + '<div class="box" style="padding:0"><table><tr><th>' + esc(TA.cItem) + '</th><th>' + esc(TA.cQty) + '</th><th>' + esc(TA.companyTotal) + '</th><th>' + esc(TA.fMin) + '</th><th></th></tr>' +
+      (!rows.length ? '<tr><td colspan="5" class="muted">' + esc(TA.nothing) + '</td></tr>'
+        : A.stockCat === 'cat' ? catGroups(rows.map(id => ({ id, html: placeRow(id) })), 'pl', 5) : rows.map(placeRow).join('')) + '</table></div>';
   }
 
   function stockByPerson() {
@@ -822,10 +856,10 @@
     pulls.forEach(x => { (byProject[x.projectId] = byProject[x.projectId] || []).push(x); });
     return cards + '<div class="split" style="grid-template-columns:1fr 1fr"><div class="box"><b>' + esc(TA.personPulls) + '</b>' +
       (pulls.length ? Object.keys(byProject).map(prj => '<h2 style="margin:10px 0 4px;font-size:15px">' + esc((A.ix.projects[prj] || {}).name) + '</h2>' +
-        byProject[prj].map(x => '<div class="kv"><span>' + esc(displayName(x.itemId)) + '</span><span class="inline">' + num(x.qty) + ' ' + esc(unitLabel(x.itemId)) +
-          ' <button class="btn sm" data-a="returnPull" data-id="' + x.itemId + '" data-project="' + prj + '" data-person="' + pid + '">' + esc(TA.returnToStock) + '</button></span></div>').join('')).join('')
+        (rowsOf => (A.stockCat === 'cat' ? catGroups(rowsOf, 'pp' + prj) : rowsOf.map(r => r.html).join('')))(byProject[prj].map(x => ({ id: x.itemId, html: '<div class="kv"><span>' + esc(displayName(x.itemId)) + '</span><span class="inline">' + num(x.qty) + ' ' + esc(unitLabel(x.itemId)) +
+          ' <button class="btn sm" data-a="returnPull" data-id="' + x.itemId + '" data-project="' + prj + '" data-person="' + pid + '">' + esc(TA.returnToStock) + '</button></span></div>' })))).join('')
         : '<div class="muted">' + esc(TA.nothing) + '</div>') + '</div>' +
-      '<div class="box"><b>' + esc(TA.personTools) + '</b>' + (tools.length ? tools.map(id => '<div class="kv"><span>' + esc(displayName(id)) + '</span><span class="inline">' + num(A.d.stock[id]['P:' + pid]) + ' <button class="btn sm" data-a="moveStock" data-id="' + id + '" data-from="P:' + pid + '">' + esc(TA.moveStock) + '</button></span></div>').join('')
+      '<div class="box"><b>' + esc(TA.personTools) + '</b>' + (tools.length ? (rowsOf => (A.stockCat === 'cat' ? catGroups(rowsOf, 'pt') : rowsOf.map(r => r.html).join('')))(tools.map(id => ({ id, html: '<div class="kv"><span>' + esc(displayName(id)) + '</span><span class="inline">' + num(A.d.stock[id]['P:' + pid]) + ' <button class="btn sm" data-a="moveStock" data-id="' + id + '" data-from="P:' + pid + '">' + esc(TA.moveStock) + '</button></span></div>' })))
         : '<div class="muted">' + esc(TA.nothing) + '</div>') + '</div></div>';
   }
 
@@ -2416,14 +2450,14 @@
   H.stockCat = el => { A.stockCat = el.dataset.v; saveCat(); render(); };
   H.catToggle = el => {
     const id = el.dataset.id;
-    const s = catStats(stockItems())[id] || { low: 0 };
-    A.catOpen[id] = !catIsOpen(id, s);
+    if (id.indexOf(':') > 0) A.catOpen[id] = !nsOpen(id);
+    else A.catOpen[id] = !catIsOpen(id, catStats(stockItems())[id] || { low: 0 });
     saveCat();
     document.getElementById('stockBody').innerHTML = stockBody();
   };
   H.catAll = el => {
     const open = el.dataset.v === '1';
-    A.catOpen = { _none: open };
+    A.catOpen = { _none: open, _nsDefault: open };
     A.d.tables.Items.filter(i => !i.archived && !isLeaf(i.id)).forEach(f => { A.catOpen[f.id] = open; });
     saveCat();
     document.getElementById('stockBody').innerHTML = stockBody();

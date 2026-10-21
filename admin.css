@@ -210,3 +210,5 @@ tr.dsec td { background: var(--beige); color: var(--brown); }
 .catbody { padding-right: 18px; }
 .catbody .srow { border-bottom: 1px solid var(--line); }
 tr.catrow td { background: var(--beige); color: var(--brown); font-weight: 700; }
+tr.catrow.click { cursor: pointer; }
+tr.catrow .chev { display: inline-block; width: 14px; color: var(--muted); }
