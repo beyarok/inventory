@@ -56,6 +56,8 @@
     stockFilter: 'all',
     stockQ: '',
     stockOpen: {},
+    stockCat: (() => { try { return localStorage.getItem((window.STORE_PREFIX || 'inv:') + 'admin:stockCat') || 'flat'; } catch (e) { return 'flat'; } })(),
+    catOpen: (() => { try { return JSON.parse(localStorage.getItem((window.STORE_PREFIX || 'inv:') + 'admin:catOpen') || '{}'); } catch (e) { return {}; } })(),
     stockPlace: '',
     stockPerson: '',
     orderTab: 'basket',
@@ -648,6 +650,8 @@
       h += seg('stockView', A.stockView, [['bars', TA.viewBars], ['table', TA.viewTable]]) +
         seg('stockFilter', A.stockFilter, [['all', TA.fAll], ['below', TA.fBelow], ['consumable', TA.fConsumable], ['tool', TA.fTools]]) +
         (A.stockView === 'bars' ? seg('stockSort', A.stockSort, [['low', TA.sortLow], ['abc', TA.sortAbc]]) : '') +
+        seg('stockCat', A.stockCat, [['flat', TA.stockFlat], ['cat', TA.stockByCat]]) +
+        (A.stockCat === 'cat' && A.stockView === 'bars' ? '<button class="btn sm" data-a="catAll" data-v="1">' + esc(TA.openAll) + '</button><button class="btn sm" data-a="catAll" data-v="0">' + esc(TA.closeAll) + '</button>' : '') +
         '<input class="in" id="stockQ" style="max-width:220px" placeholder="' + esc(TA.searchItems) + '" value="' + esc(A.stockQ) + '">';
     }
     h += '</div><div id="stockBody">' + stockBody() + '</div>';
@@ -669,11 +673,85 @@
     if (A.stockGroup === 'place') return stockByPlace();
     if (A.stockGroup === 'person') return stockByPerson();
     const list = stockItems();
-    if (A.stockView === 'table') return stockTable(list);
-    const ratio = it => (hasMin(it) && it.minQty > 0 ? warehouseQty(it.id) / it.minQty : 99);
-    list.sort((a, b) => (A.stockSort === 'low' ? ratio(a) - ratio(b) : 0) || displayName(a.id).localeCompare(displayName(b.id), 'he', { numeric: true }));
+    if (A.stockView === 'table') return A.stockCat === 'cat' ? stockTableCat(list) : stockTable(list);
+    stockSortList(list);
     if (!list.length) return '<div class="box muted">' + esc(TA.nothing) + '</div>';
-    return '<div class="box" style="padding:4px 14px">' + list.map(it => {
+    if (A.stockCat === 'cat') return stockCatHtml(list);
+    return '<div class="box" style="padding:4px 14px">' + list.map(it => stockRow(it, true)).join('') + '</div>';
+  }
+
+  const stockRatio = it => (hasMin(it) && it.minQty > 0 ? warehouseQty(it.id) / it.minQty : 99);
+  function stockSortList(list) {
+    list.sort((a, b) => (A.stockSort === 'low' ? stockRatio(a) - stockRatio(b) : 0) || displayName(a.id).localeCompare(displayName(b.id), 'he', { numeric: true }));
+    return list;
+  }
+
+  // ---- לפי קטגוריות: כותרת לכל קטגוריה (נפתחת/נסגרת) עם סיכום, ומתחתיה הפריטים ----
+  function catTree() {
+    const kids = {};
+    A.d.tables.Items.filter(i => !i.archived && !isLeaf(i.id)).forEach(f => { (kids[f.parentId || ''] = kids[f.parentId || ''] || []).push(f); });
+    Object.keys(kids).forEach(k => kids[k].sort((a, b) => (a.sort || 0) - (b.sort || 0) || a.name.localeCompare(b.name, 'he', { numeric: true })));
+    return kids;
+  }
+  function catStats(list) {
+    // לכל קטגוריה: כמה פריטים, כמה חסרים, כמה מתקרבים (כולל כל מה שמתחתיה)
+    const st = {};
+    list.forEach(it => {
+      const w = warehouseQty(it.id);
+      const low = hasMin(it) && w < it.minQty;
+      const near = !low && nearMin(it, w);
+      const ids = pathOf(it.id).map(p => p.id);
+      (ids.length ? ids : ['_none']).forEach(id => {
+        const s = st[id] = st[id] || { n: 0, low: 0, near: 0 };
+        s.n++; if (low) s.low++; if (near) s.near++;
+      });
+    });
+    return st;
+  }
+  const catSearching = () => !!norm(A.stockQ) || A.stockFilter !== 'all';
+  // פתוחה? מה שהמנהל בחר; אחרת – קטגוריה שיש בה חסר נפתחת לבד. בחיפוש – הכל פתוח.
+  const catIsOpen = (id, s) => (catSearching() ? true : A.catOpen[id] !== undefined ? A.catOpen[id] : s.low > 0);
+  function catHead(id, name, s, depth, open) {
+    return '<div class="cathead d' + Math.min(depth, 3) + (open ? ' open' : '') + '" data-a="catToggle" data-id="' + id + '">' +
+      '<span class="chev">' + (open ? '▾' : '◂') + '</span><b>' + esc(name) + '</b> <span class="muted small">' + esc(s.n === 1 ? TA.catItem1 : fmt(TA.catItems, { n: s.n })) + '</span>' +
+      '<span class="catbadges">' + (s.low ? '<span class="tag r">' + esc(s.low === 1 ? TA.catLow1 : fmt(TA.catLow, { n: s.low })) + '</span>' : '') +
+      (s.near ? '<span class="tag y">' + esc(s.near === 1 ? TA.catNear1 : fmt(TA.catNear, { n: s.near })) + '</span>' : '') +
+      (!s.low && !s.near ? '<span class="muted small">' + esc(TA.catOk) + '</span>' : '') + '</span></div>';
+  }
+  function stockCatHtml(list) {
+    const kids = catTree();
+    const st = catStats(list);
+    const byParent = {};
+    list.forEach(it => { (byParent[item(it.id).parentId || ''] = byParent[item(it.id).parentId || ''] || []).push(it); });
+    const level = (fid, depth) => {
+      let h = '';
+      (kids[fid] || []).forEach(f => {
+        const s = st[f.id];
+        if (!s) return;
+        const open = catIsOpen(f.id, s);
+        h += '<div class="catgrp">' + catHead(f.id, f.name, s, depth, open) + (open ? '<div class="catbody">' + level(f.id, depth + 1) + '</div>' : '') + '</div>';
+      });
+      if (fid && byParent[fid]) h += byParent[fid].map(it => stockRow(it, false)).join('');
+      return h;
+    };
+    let h = level('', 0);
+    if (byParent['']) {
+      const s = st._none;
+      const open = catIsOpen('_none', s);
+      h += '<div class="catgrp">' + catHead('_none', TA.noCategory, s, 0, open) + (open ? '<div class="catbody">' + byParent[''].map(it => stockRow(it, false)).join('') + '</div>' : '') + '</div>';
+    }
+    return '<div class="box catbox" style="padding:4px 14px">' + h + '</div>';
+  }
+  // טבלה לפי קטגוריות: שורת כותרת לכל קטגוריה (עם הנתיב), בלי קיפול
+  function stockTableCat(list) {
+    const key = it => pathOf(it.id).map(p => String(p.sort || 0).padStart(4, '0') + p.name).join('›');
+    list.sort((a, b) => key(a).localeCompare(key(b), 'he', { numeric: true }) || displayName(a.id).localeCompare(displayName(b.id), 'he', { numeric: true }));
+    const html = stockTable(list.slice(), true);
+    return html;
+  }
+
+  function stockRow(it, showPath) {
+    {
       const w = warehouseQty(it.id);
       const min = hasMin(it) ? it.minQty : null;
       const low = min !== null && w < min;
@@ -684,27 +762,30 @@
         : '';
       const open = A.stockOpen[it.id];
       const row = A.d.stock[it.id] || {};
-      return '<div class="srow"><div class="stop" data-a="stockToggle" data-id="' + it.id + '"><span><b>' + esc(displayName(it.id)) + '</b> <span class="muted small">' + esc(pathOf(it.id).map(p => p.name).join(' › ')) + '</span></span>' +
+      return '<div class="srow"><div class="stop" data-a="stockToggle" data-id="' + it.id + '"><span><b>' + esc(displayName(it.id)) + '</b>' + (showPath ? ' <span class="muted small">' + esc(pathOf(it.id).map(p => p.name).join(' › ')) + '</span>' : '') + '</span>' +
         '<span class="' + (low ? 'lowtxt' : near ? 'neartxt' : '') + '">' + (min !== null ? esc(fmt(TA.qtyOfMin, { qty: num(w), min: num(min), unit: unitLabel(it.id) })) : num(w) + ' ' + esc(unitLabel(it.id))) +
         (onOrder(it.id) ? ' <span class="tag g">' + esc(TA.cOnOrder) + ' ' + num(onOrder(it.id)) + '</span>' : '') + '</span></div>' + bar +
         (open ? '<div class="sexp">' + Object.keys(row).filter(k => row[k]).map(k => '<span>' + esc(holderName(k)) + ': ' + num(row[k]) + '</span>').join('') +
           '<button class="btn sm" data-a="setQty" data-id="' + it.id + '">' + esc(TA.setQty) + '</button><button class="btn sm" data-a="moveStock" data-id="' + it.id + '">' + esc(TA.moveStock) + '</button></div>' : '') + '</div>';
-    }).join('') + '</div>';
+    }
   }
 
-  function stockTable(list) {
+  function stockTable(list, withCats) {
     const locs = A.d.tables.Locations.filter(l => !l.archived && STOCK_TYPES.indexOf(l.type) >= 0);
     const sum = (id, pred) => { const row = A.d.stock[id] || {}; return Object.keys(row).filter(pred).reduce((s, k) => s + row[k], 0); };
     const isType = t => k => k.indexOf('L:') === 0 && (A.ix.locs[k.slice(2)] || {}).type === t;
-    list.sort((a, b) => displayName(a.id).localeCompare(displayName(b.id), 'he', { numeric: true }));
+    if (!withCats) list.sort((a, b) => displayName(a.id).localeCompare(displayName(b.id), 'he', { numeric: true }));
     const vehicles = A.d.tables.Locations.some(l => l.type === 'vehicle' && !l.archived);
     return '<div class="box" style="padding:0;overflow:auto"><table><tr><th>' + esc(TA.cItem) + '</th>' + locs.map(l => '<th>' + esc(l.name) + '</th>').join('') +
       (vehicles ? '<th>' + esc(TA.vehicles) + '</th>' : '') + '<th>' + esc(TA.people) + '</th><th>' + esc(TA.total) + '</th><th>' + esc(TA.fMin) + '</th></tr>' +
-      list.map(it => {
+      list.map((it, i) => {
         const w = warehouseQty(it.id);
         const low = hasMin(it) && w < it.minQty;
+        const cat = pathOf(it.id).map(p => p.name).join(' › ') || TA.noCategory;
+        const head = withCats && (i === 0 || (pathOf(list[i - 1].id).map(p => p.name).join(' › ') || TA.noCategory) !== cat)
+          ? '<tr class="catrow"><td colspan="' + (locs.length + (vehicles ? 5 : 4)) + '">' + esc(cat) + '</td></tr>' : '';
         const cell = n => '<td>' + (n ? num(n) : '<span class="muted">–</span>') + '</td>';
-        return '<tr' + (low ? ' class="lowrow"' : nearMin(it, w) ? ' class="nearrow"' : '') + '><td>' + esc(displayName(it.id)) + '</td>' + locs.map(l => cell((A.d.stock[it.id] || {})['L:' + l.id])).join('') +
+        return head + '<tr' + (low ? ' class="lowrow"' : nearMin(it, w) ? ' class="nearrow"' : '') + '><td>' + esc(displayName(it.id)) + '</td>' + locs.map(l => cell((A.d.stock[it.id] || {})['L:' + l.id])).join('') +
           (vehicles ? cell(sum(it.id, isType('vehicle'))) : '') + cell(sum(it.id, k => k.indexOf('P:') === 0)) +
           '<td><b>' + num(w) + '</b></td><td>' + (hasMin(it) ? num(it.minQty) : '') + '</td></tr>';
       }).join('') + '</table></div>';
@@ -2331,6 +2412,22 @@
   ['stockGroup', 'stockView', 'stockFilter', 'stockSort', 'stockPlace', 'stockPerson'].forEach(k => {
     H[k] = el => { A[k] = el.dataset.v; render(); };
   });
+  const saveCat = () => { try { localStorage.setItem((window.STORE_PREFIX || 'inv:') + 'admin:stockCat', A.stockCat); localStorage.setItem((window.STORE_PREFIX || 'inv:') + 'admin:catOpen', JSON.stringify(A.catOpen)); } catch (e) { /* */ } };
+  H.stockCat = el => { A.stockCat = el.dataset.v; saveCat(); render(); };
+  H.catToggle = el => {
+    const id = el.dataset.id;
+    const s = catStats(stockItems())[id] || { low: 0 };
+    A.catOpen[id] = !catIsOpen(id, s);
+    saveCat();
+    document.getElementById('stockBody').innerHTML = stockBody();
+  };
+  H.catAll = el => {
+    const open = el.dataset.v === '1';
+    A.catOpen = { _none: open };
+    A.d.tables.Items.filter(i => !i.archived && !isLeaf(i.id)).forEach(f => { A.catOpen[f.id] = open; });
+    saveCat();
+    document.getElementById('stockBody').innerHTML = stockBody();
+  };
   H.stockToggle = el => {
     A.stockOpen[el.dataset.id] = !A.stockOpen[el.dataset.id];
     document.getElementById('stockBody').innerHTML = stockBody();

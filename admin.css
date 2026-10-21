@@ -196,3 +196,17 @@ tr.sel td { background: var(--green-bg); }
 .chipbtn { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 5px 12px; font-size: 14px; }
 .chipbtn.on { background: var(--green); border-color: var(--green); color: #fff; }
 tr.dsec td { background: var(--beige); color: var(--brown); }
+
+/* מלאי לפי קטגוריות */
+.cathead { display: flex; align-items: baseline; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+.cathead .chev { width: 14px; color: var(--muted); }
+.cathead.d0 b { font-size: 17px; color: var(--brown); }
+.cathead.d1 { padding-right: 18px; }
+.cathead.d2 { padding-right: 36px; }
+.cathead.d3 { padding-right: 54px; }
+.cathead .catbadges { margin-inline-start: auto; display: flex; gap: 6px; align-items: center; }
+.tag.r { background: var(--danger-bg, #FCEBEB); color: var(--danger, #A32D2D); }
+.tag.y { background: var(--warn-bg, #FAEEDA); color: var(--warn, #854F0B); }
+.catbody { padding-right: 18px; }
+.catbody .srow { border-bottom: 1px solid var(--line); }
+tr.catrow td { background: var(--beige); color: var(--brown); font-weight: 700; }
