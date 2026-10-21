@@ -1138,6 +1138,25 @@ function setLinesExpected_(lineIds, date, actor) {
   return { updated: done.length };
 }
 
+// "בטל מה שלא הגיע": השורה מצטמצמת למה שכבר התקבל (0 = יורדת מההזמנה).
+// הסכום של ההזמנה, "בדרך", יתרה לאספקה וקבלה בטלפון – מתעדכנים לבד. הזמנה שלא נשאר בה כלום ולא הגיע ממנה כלום – בוטלה.
+function cancelLineRest_(lineId, actor) {
+  const l = Db.byId('OrderLines', lineId);
+  const order = l && Db.byId('Orders', l.orderId);
+  if (!order) userError_(MSG.missing + 'שורה');
+  if (['sent', 'partial'].indexOf(order.status) < 0) userError_('אפשר לבטל רק בהזמנה שנשלחה ועוד לא נסגרה');
+  const per = l.buyUnitQty || 1;
+  const got = Math.round(((Model.receivedByLine()[l.id] || 0) / per) * 100) / 100;
+  if (got >= l.qtyBuy) userError_('כל מה שהוזמן בשורה הזו כבר הגיע');
+  const before = l.qtyBuy;
+  Db.update('OrderLines', l.id, { qtyBuy: got });
+  const it = Model.item(l.itemId) || {};
+  log_(actor, 'lineCancel', 'Orders', order.id, 'הזמנה ' + order.number + ' · ' + it.name + ': בוטלו ' + (before - got) + ' (נשאר ' + got + ')', { qtyBuy: before }, { qtyBuy: got });
+  if (!orderLines_(order.id).length) Db.update('Orders', order.id, { status: 'canceled', closedAt: now_() });
+  else refreshOrderStatus_(order.id);
+  return Db.byId('Orders', order.id);
+}
+
 // ==================== Admin.gs ====================
 // פעולות המנהל: רשימות, עץ הפריטים, פריטים לא מוכרים, מחירים, פרויקטים, הגדרות.
 
@@ -1593,6 +1612,7 @@ const ADMIN_ACTIONS = {
   'admin.order.pdf': (req) => orderPdf_(req.id),
   'admin.order.doc': (req) => orderStatusDoc_(req.id, req.kind),
   'admin.order.expected': (req, me) => setLinesExpected_(req.lineIds || [], req.date, me),
+  'admin.order.lineCancel': (req, me) => cancelLineRest_(req.lineId, me),
   'admin.project.status': (req, me) => strip_(setProjectStatus_(req.id, req.status, me)),
   'admin.project.closeCheck': (req) => projectCloseCheck_(req.id),
   'admin.container.assign': (req, me) => assignContainer_(req.containerId, req.projectId, req.assign !== false, me),

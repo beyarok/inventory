@@ -1026,7 +1026,8 @@
           (anyDisc ? '<td>' + money(l.listPrice !== null && l.listPrice !== '' ? l.listPrice : l.unitPriceBuy) + '</td><td>' + (l.discount ? l.discount + '%' : '') + '</td>' : '') +
           '<td>' + (draft ? '<input class="in" type="number" min="0" step="0.01" style="max-width:110px" data-lp value="' + esc(l.unitPriceBuy) + '">' : money(l.unitPriceBuy)) + '</td>' +
           '<td>' + money(l.unitPriceBuy === null ? null : l.unitPriceBuy * l.qtyBuy) + '</td>' + (draft ? '<td><button class="btn sm danger" data-a="lineRemove">✕</button></td>' : '') +
-          (openO ? '<td>' + (full ? '' : '<input class="in" type="date" data-exp="' + l.id + '" value="' + esc(l.expectedAt || '') + '" style="width:140px">') + '</td>' : '') + '</tr>';
+          (openO ? '<td>' + (full ? '' : '<input class="in" type="date" data-exp="' + l.id + '" value="' + esc(l.expectedAt || '') + '" style="width:140px">' +
+            '<button class="link small" data-a="lineCancel" data-id="' + l.id + '" style="display:block;margin-top:4px">' + esc(TA.lineCancel) + '</button>') + '</td>' : '') + '</tr>';
       }).join('') + '</table></div>' +
       '<div class="btns" style="justify-content:space-between;margin:10px 0">' + (draft ? '<button class="btn" data-a="lineAdd">' + ICON.plus + esc(TA.addLine) + '</button>' : '<span></span>') +
       '<b>' + esc(fmt(TA.totals, { before: money(t.before), after: money(t.after) })) + '</b></div>';
@@ -2619,6 +2620,16 @@
     setTimeout(go, 200);
   }
   // מצב הזמנה: יתרה לאספקה / מה התקבל
+  // ביטול מה שלא הגיע בשורה אחת (השאר בהזמנה לא משתנה)
+  H.lineCancel = async el => {
+    const l = A.d.tables.OrderLines.find(x => x.id === el.dataset.id);
+    if (!l) return;
+    const per = l.buyUnitQty || 1;
+    const got = Math.round(((A.d.receivedByLine[l.id] || 0) / per) * 100) / 100;
+    const msg = fmt(got ? TA.lineCancelQ : TA.lineCancelQNone, { n: num(l.qtyBuy - got), item: displayName(l.itemId), got: num(got) });
+    if (!(await confirmBox(msg, TA.lineCancelYes, true))) return;
+    mutate('admin.order.lineCancel', { lineId: l.id }, TA.lineCancelDone);
+  };
   H.orderStatusDoc = async el => {
     try {
       const r = await api('admin.order.doc', { id: A.orderId, kind: el.dataset.kind });
