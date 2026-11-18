@@ -999,6 +999,27 @@ function log_(actor, action, entity, entityId, summary, before, after) {
   });
 }
 
+// סדר קבוע לפריטים בתוך תיקייה (בקשה של ארז): ids = כל הפריטים בתיקייה, בסדר החדש
+function reorderItems_(parentId, ids, actor) {
+  const kids = Model.childrenOf(parentId);
+  const byId = {};
+  kids.forEach(c => { byId[c.id] = c; });
+  const uniq = {};
+  ids.forEach(id => { uniq[id] = true; });
+  if (!Array.isArray(ids) || ids.length !== kids.length || Object.keys(uniq).length !== ids.length || ids.some(id => !byId[id])) {
+    userError_(MSG.conflict);
+  }
+  const before = kids.slice().sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0)).map(c => c.name);
+  ids.forEach((id, i) => {
+    const s = (i + 1) * 10;
+    if ((Number(byId[id].sort) || 0) !== s) Db.update('Items', id, { sort: s });
+  });
+  const folder = parentId ? (Model.item(parentId) || {}).name : 'ראשי';
+  log_(actor, 'update', 'Items', parentId, 'סדר פריטים: ' + folder, before, ids.map(id => byId[id].name));
+  Model.reset();
+  return { ids };
+}
+
 function strip_(o) {
   const c = Object.assign({}, o);
   delete c._row;
@@ -1033,6 +1054,11 @@ function saveRecord_(entity, rec, actor, opts) {
   if (entity === 'Projects') Object.assign(data, { status: 'open', openedAt: now_() });
   if (entity === 'Items') {
     Object.assign(data, { createdAt: now_(), updatedAt: now_() });
+    // בתיקייה שכבר נקבע בה סדר – פריט חדש נכנס בסוף, ולא קופץ לראש הרשימה
+    if (data.sort === undefined || data.sort === '' || data.sort === null) {
+      const maxSort = Model.childrenOf(data.parentId || '').reduce((m, c) => Math.max(m, Number(c.sort) || 0), 0);
+      if (maxSort > 0) data.sort = maxSort + 10;
+    }
     const parentStock = data.parentId && Model.isLeaf(data.parentId) && holdersOf_(data.parentId);
     if (parentStock && parentStock.length && !(opts && opts.moveStockToChild)) {
       const e = new Error('לפריט הזה יש מלאי. לאיזה תת-סוג להעביר אותו?');
@@ -1417,6 +1443,7 @@ const ADMIN_ACTIONS = {
   'admin.restore': (req, me) => strip_(restore_(req.entity, req.id, me)),
   'admin.items.duplicate': (req, me) => strip_(duplicateItem_(req.id, me)),
   'admin.items.quickAdd': (req, me) => quickAdd_(req.parentId || '', req.rows || [], me),
+  'admin.items.reorder': (req, me) => reorderItems_(req.parentId || '', req.ids || [], me),
   'admin.movement.add': (req, me) => recordMovement_(req.movement || {}, me, true),
   'admin.movement.reverse': (req, me) => reverseMovement_(req.id, me, true),
   'admin.doc.add': (req, me) => addDoc_(req.doc || {}, me),

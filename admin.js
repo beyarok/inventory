@@ -567,6 +567,10 @@
       (leaf ? '<button class="btn" data-a="duplicateItem">' + esc(TA.duplicate) + '</button>' : '') +
       '<button class="btn" data-a="addChild">' + ICON.plus + esc(TA.newItem) + '</button>' +
       '<button class="btn" data-a="moveItem">' + esc(TA.moveFolder) + '</button>' +
+      ((A.ix.children[it.parentId || ''] || []).length > 1
+        ? '<button class="btn" data-a="orderUp" title="' + esc(TA.orderUpTitle) + '">' + esc(TA.orderUp) + '</button>' +
+          '<button class="btn" data-a="orderDown" title="' + esc(TA.orderDownTitle) + '">' + esc(TA.orderDown) + '</button>'
+        : '') +
       '<button class="btn danger" data-a="archiveItem">' + esc(TA.remove) + '</button></div></div>';
 
     if (leaf) {
@@ -2346,6 +2350,24 @@
     });
     toast(TA.saved);
   };
+  // סדר קבוע בתוך התיקייה: מזיזים את הפריט המסומן מקום אחד למעלה או למטה
+  function moveInOrder(step) {
+    if (waitTmp(A.sel)) return;
+    const it = item(A.sel);
+    if (!it) return;
+    const pid = it.parentId || '';
+    const ids = (A.ix.children[pid] || []).map(c => c.id);
+    if (ids.some(isTmp) && waitTmp(ids.find(isTmp))) return;
+    const i = ids.indexOf(it.id), j = i + step;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    ids[i] = ids[j];
+    ids[j] = it.id;
+    optimistic('admin.items.reorder', { parentId: pid, ids }, d => {
+      ids.forEach((id, k) => { const x = d.tables.Items.find(r => r.id === id); if (x) x.sort = (k + 1) * 10; });
+    });
+  }
+  H.orderUp = () => moveInOrder(-1);
+  H.orderDown = () => moveInOrder(1);
   H.duplicateItem = () => {
     if (waitTmp(A.sel)) return;
     const it = item(A.sel);
