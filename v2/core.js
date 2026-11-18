@@ -618,7 +618,28 @@ function saveOrder_(data, actor) {
   const dest = Db.byId('Locations', destIds[0]);
 
   let order = data.id ? Db.byId('Orders', data.id) : null;
-  if (order && order.status !== 'draft') userError_('אפשר לערוך רק הזמנה שעוד לא נשלחה');
+  // עריכה של הזמנה שכבר נשלחה (data.amend): אותו ספק, ואי אפשר לרדת מתחת למה שכבר התקבל
+  const amend = !!(order && data.amend && ['sent', 'partial'].indexOf(order.status) >= 0);
+  if (order && order.status !== 'draft' && !amend) userError_('אפשר לערוך רק הזמנה שעוד לא נשלחה');
+  let amendBefore = null;
+  if (amend) {
+    if (supplier.id !== order.supplierId) userError_('אי אפשר להחליף ספק בהזמנה שכבר נשלחה');
+    if (!(data.lines || []).some(l => Number(l.qtyBuy) > 0)) userError_('בהזמנה שנשלחה חייבת להישאר לפחות שורה אחת. כדי לבטל אותה – "בטל הזמנה".');
+    const received = Model.receivedByLine();
+    const qtyOf = {};
+    (data.lines || []).forEach(l => { if (l.id) qtyOf[l.id] = Number(l.qtyBuy) || 0; });
+    amendBefore = orderLines_(order.id).map(l => ({ id: l.id, itemId: l.itemId, destId: l.destId, qtyBuy: l.qtyBuy, unitPriceBuy: l.unitPriceBuy }));
+    // בדיקה לפני כל שינוי – כדי שלא תישמר חצי עריכה
+    orderLines_(order.id).forEach(l => {
+      const got = received[l.id] || 0;
+      if (!got) return;
+      const q = qtyOf[l.id] !== undefined ? qtyOf[l.id] : 0;
+      if (q * (l.buyUnitQty || 1) < got - 1e-9) {
+        userError_('ב"{item}" כבר התקבלו {got}. אי אפשר להוריד את הכמות מתחת לזה.',
+          { item: (Model.item(l.itemId) || {}).name || '', got: Math.round((got / (l.buyUnitQty || 1)) * 100) / 100 });
+      }
+    });
+  }
   const fields = {
     supplierId: supplier.id, destId: dest.id, destIds: destIds.join(','), pricesIncludeVat: !!data.pricesIncludeVat,
     note: String(data.note || '').slice(0, 1000),
@@ -662,6 +683,13 @@ function saveOrder_(data, actor) {
   // שורות שלא נשלחו שוב = הוסרו מהטיוטה
   Object.keys(existing).forEach(id => Db.update('OrderLines', id, { qtyBuy: 0 }));
   Db.insertMany('OrderLines', newLines);
+  if (amend) {
+    const after = orderLines_(order.id).map(l => ({ id: l.id, itemId: l.itemId, destId: l.destId, qtyBuy: l.qtyBuy, unitPriceBuy: l.unitPriceBuy }));
+    log_(actor, 'amend', 'Orders', order.id, 'הזמנה ' + order.number + ' · ' + supplier.name + ' – עודכנה אחרי שליחה', amendBefore, after);
+    // קיצוץ למה שהתקבל יכול לסגור את ההזמנה; תוספת יכולה לפתוח אותה מחדש
+    refreshOrderStatus_(order.id);
+    return Db.byId('Orders', order.id);
+  }
   log_(actor, data.id ? 'update' : 'create', 'Orders', order.id, 'הזמנה ' + order.number + ' · ' + supplier.name);
   return order;
 }

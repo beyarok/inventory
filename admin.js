@@ -989,6 +989,8 @@
 
   function orderView(o) {
     if (o.status === 'draft') return draftView(o);
+    if (A.amend[o.id] && (o.status === 'sent' || o.status === 'partial')) return draftView(o);
+    delete A.amend[o.id];
     delete A.drafts[o.id];
     const draft = false;
     const lines = linesOf(o.id);
@@ -1030,8 +1032,7 @@
           (anyDisc ? '<td>' + money(l.listPrice !== null && l.listPrice !== '' ? l.listPrice : l.unitPriceBuy) + '</td><td>' + (l.discount ? l.discount + '%' : '') + '</td>' : '') +
           '<td>' + (draft ? '<input class="in" type="number" min="0" step="0.01" style="max-width:110px" data-lp value="' + esc(l.unitPriceBuy) + '">' : money(l.unitPriceBuy)) + '</td>' +
           '<td>' + money(l.unitPriceBuy === null ? null : l.unitPriceBuy * l.qtyBuy) + '</td>' + (draft ? '<td><button class="btn sm danger" data-a="lineRemove">✕</button></td>' : '') +
-          (openO ? '<td>' + (full ? '' : '<input class="in" type="date" data-exp="' + l.id + '" value="' + esc(l.expectedAt || '') + '" style="width:140px">' +
-            '<button class="link small" data-a="lineCancel" data-id="' + l.id + '" style="display:block;margin-top:4px">' + esc(TA.lineCancel) + '</button>') + '</td>' : '') + '</tr>';
+          (openO ? '<td>' + (full ? '' : '<input class="in" type="date" data-exp="' + l.id + '" value="' + esc(l.expectedAt || '') + '" style="width:140px">') + '</td>' : '') + '</tr>';
       }).join('') + '</table></div>' +
       '<div class="btns" style="justify-content:space-between;margin:10px 0">' + (draft ? '<button class="btn" data-a="lineAdd">' + ICON.plus + esc(TA.addLine) + '</button>' : '<span></span>') +
       '<b>' + esc(fmt(TA.totals, { before: money(t.before), after: money(t.after) })) + '</b></div>';
@@ -1040,6 +1041,7 @@
       '<button class="btn" data-a="orderPdf">' + esc(TA.supplierDoc) + '</button>' +
       (lines.some(l => (A.d.receivedByLine[l.id] || 0) < l.qtyBuy * (l.buyUnitQty || 1)) ? '<button class="btn" data-a="orderStatusDoc" data-kind="pending">' + esc(TA.docPending) + '</button>' : '') +
       (lines.some(l => A.d.receivedByLine[l.id]) ? '<button class="btn" data-a="orderStatusDoc" data-kind="received">' + esc(TA.docReceived) + '</button>' : '') +
+      (o.status === 'sent' || o.status === 'partial' ? '<button class="btn p" data-a="orderAmend">' + esc(TA.amendOrder) + '</button>' : '') +
       (o.status === 'sent' || o.status === 'partial' ? '<button class="btn" data-a="orderClose">' + esc(TA.closePartial) + '</button>' : '') +
       ((draft || o.status === 'sent') && !lines.some(l => A.d.receivedByLine[l.id]) ? '<button class="btn danger" data-a="orderCancel">' + esc(TA.cancelOrder) + '</button>' : '') + '</div>';
     h += orderDocs(o);
@@ -1899,6 +1901,7 @@
   // ---- הזמנה בטיוטה: נערכת במסך ונשמרת לבד ----
   // שורה במסך = פריט. אם ההזמנה מתחלקת לכמה מחסנים – עמודת כמות לכל מחסן (מחיר והנחה זהים).
   A.drafts = {};
+  A.amend = {}; // הזמנות שנשלחו ונפתחו לעריכה
   const orderDests = o => {
     const ids = String(o.destIds || '').split(',').filter(Boolean);
     return ids.length ? ids : [o.destId];
@@ -1983,6 +1986,7 @@
 
   function draftView(o) {
     const d = draftOf(o);
+    const amend = o.status !== 'draft';
     const sup = A.ix.sups[d.supplierId] || {};
     const sups = A.d.tables.Suppliers.filter(s => !s.archived || s.id === d.supplierId);
     const places = A.d.tables.Locations.filter(l => (!l.archived || d.destIds.indexOf(l.id) >= 0) && l.type !== 'repair' && l.type !== 'vehicle');
@@ -2003,7 +2007,8 @@
       const diffDisc = hasList && Number(l.discount) !== Number(si.discount || 0);
       const lp = lastPaid(d.supplierId, l.itemId);
       const other = bestOther(d.supplierId, l.itemId);
-      const hint = (lp ? fmt(TA.lastHere, { date: shortDate(lp.at), qty: lp.qty === null ? '' : num(lp.qty) + ' ' + (unit || ''), net: money(lp.net), disc: lp.disc ? ' (' + lp.disc + '%)' : '' }) : TA.firstHere) +
+      const got = amend ? Object.keys(l.ids).reduce((t, k) => t + (A.d.receivedByLine[l.ids[k]] || 0), 0) / per : 0;
+      const hint = (got ? '<b>' + esc(fmt(TA.amendGot, { n: num(Math.round(got * 100) / 100) })) + '</b> · ' : '') + (lp ? fmt(TA.lastHere, { date: shortDate(lp.at), qty: lp.qty === null ? '' : num(lp.qty) + ' ' + (unit || ''), net: money(lp.net), disc: lp.disc ? ' (' + lp.disc + '%)' : '' }) : TA.firstHere) +
         (other ? ' · ' + fmt(TA.atOther, { name: other.sup.name }) + ' <span class="' + (n !== null && other.net < n ? 'cheaper' : 'pricier') + '">' + money(other.net) + '</span> (' + esc(agoText(other.at)) + ')' : '');
       const listCell = !hasList ? '<span class="muted small">' + esc(TA.willAddToList) + '</span>'
         : (diffList || diffDisc) ? '<label class="small"><input type="checkbox" data-olsave="' + i + '"' + (l.saveToList ? ' checked' : '') + '> ' + esc(TA.saveToList) + '</label>'
@@ -2026,9 +2031,9 @@
     const destName = id => (A.ix.locs[id] || {}).name || '';
     const nCols = 9 + d.destIds.length + (multi ? 1 : 0);
     return '<button class="link" data-a="orderBack" style="margin-bottom:8px">' + esc(TA.backToList) + '</button>' +
-      '<h1>' + esc(fmt(TA.orderTitle, { number: o.number, supplier: sup.name || '' })) + ' <span class="tag">' + esc(TA.statuses.draft) + '</span></h1>' +
+      '<h1>' + esc(fmt(TA.orderTitle, { number: o.number, supplier: sup.name || '' })) + ' <span class="tag">' + esc(amend ? TA.statuses[o.status] + ' · ' + TA.amending : TA.statuses.draft) + '</span></h1>' +
       '<div class="box" style="margin-bottom:12px"><div class="btns">' +
-      '<label class="muted">' + esc(TA.fSupplier) + '</label><select class="in" data-od="supplierId" style="max-width:220px">' + sups.map(s => '<option value="' + s.id + '"' + (s.id === d.supplierId ? ' selected' : '') + '>' + esc(s.name) + '</option>').join('') + '</select>' +
+      '<label class="muted">' + esc(TA.fSupplier) + '</label><select class="in" data-od="supplierId" style="max-width:220px"' + (amend ? ' disabled' : '') + '>' + sups.map(s => '<option value="' + s.id + '"' + (s.id === d.supplierId ? ' selected' : '') + '>' + esc(s.name) + '</option>').join('') + '</select>' +
       '<button class="link" data-a="openSupplier" data-id="' + d.supplierId + '">' + esc(TA.supplierCard) + '</button>' +
       '<label class="small"><input type="checkbox" data-od="vat"' + (d.vat ? ' checked' : '') + '> ' + esc(TA.fIncVat) + '</label>' +
       '<label class="muted">' + esc(TA.fExtraDiscount) + '</label><span style="white-space:nowrap"><input class="in pct" type="number" min="0" max="100" step="0.5" data-od="extraDiscount" value="' + esc(d.extraDiscount) + '">%</span></div>' +
@@ -2038,7 +2043,7 @@
       '<span class="hint">' + esc(multi ? TA.destsHintMulti : TA.destsHint) + '</span></div>' +
       '<div class="inline" style="margin-top:8px"><input class="in" data-od="note" placeholder="' + esc(TA.fNoteInternal) + '" title="' + esc(TA.fNoteInternal) + '" value="' + esc(d.note) + '">' +
       '<input class="in" data-od="supplierNote" placeholder="' + esc(TA.fNoteSupplier) + '" title="' + esc(TA.fNoteSupplier) + '" value="' + esc(d.supplierNote) + '"></div></div>' +
-      selBar('ol') + '<div class="hint" style="margin-bottom:6px">' + esc(TA.draftHint) + '</div>' +
+      selBar('ol') + '<div class="hint" style="margin-bottom:6px">' + esc(amend ? TA.amendHint : TA.draftHint) + '</div>' +
       '<div class="box" style="padding:0;overflow:auto"><table><tr><th>' + allBox('ol') + '</th><th>' + esc(TA.cItem) + '</th>' +
       (multi ? d.destIds.map(id => '<th>' + esc(destName(id)) + '</th>').join('') + '<th>' + esc(TA.cTotalQty) + '</th>' : '<th>' + esc(TA.cQty) + '</th>') +
       '<th>' + esc(TA.cList) + '</th><th>' + esc(TA.cDiscount) + '</th><th>' + esc(TA.cNet) + '</th><th>' + esc(TA.cSum) + '</th><th></th><th></th></tr>' +
@@ -2046,8 +2051,10 @@
       '<div class="btns" style="justify-content:space-between;margin:10px 0"><button class="btn" data-a="olAdd">' + ICON.plus + esc(TA.addLine) + '</button>' +
       '<div style="text-align:left;line-height:1.8">' + (extra ? esc(TA.linesTotal) + ': ' + money(sub) + '<br>' + esc(fmt(TA.extraLine, { n: extra })) + ': -' + money(sub - total) + '<br>' : '') +
       esc(TA.beforeVat) + ': <b>' + money(before) + '</b><br>' + esc(fmt(TA.vatLine, { n: o.vatRate || A.d.settings.vatRate })) + ': ' + money(after - before) + '<br>' + esc(TA.afterVat) + ': <b>' + money(after) + '</b></div></div>' +
-      '<div class="btns"><button class="btn p" data-a="orderSend">' + esc(TA.markSent) + '</button><button class="btn" data-a="orderPdf">' + esc(TA.supplierDoc) + '</button>' +
-      '<button class="btn danger" data-a="orderCancel">' + esc(TA.cancelOrder) + '</button></div>' + orderDocs(o);
+      (amend
+        ? '<div class="btns"><button class="btn p" data-a="orderAmendSave">' + esc(TA.amendSave) + '</button><button class="btn" data-a="orderAmendCancel">' + esc(TA.amendCancel) + '</button></div>'
+        : '<div class="btns"><button class="btn p" data-a="orderSend">' + esc(TA.markSent) + '</button><button class="btn" data-a="orderPdf">' + esc(TA.supplierDoc) + '</button>' +
+          '<button class="btn danger" data-a="orderCancel">' + esc(TA.cancelOrder) + '</button></div>') + orderDocs(o);
   }
 
   // יעדים: הוספה / הסרה של מחסן
@@ -2618,6 +2625,33 @@
     if (!r.ok) return;
     if (!(await confirmBox(fmt(TA.sendConfirm, { number: o.number }), TA.markSent))) return;
     mutate('admin.order.status', { id: o.id, status: 'send' });
+  };
+  // עריכת הזמנה שכבר נשלחה: אותו מסך כמו טיוטה, נשמר רק בלחיצה
+  H.orderAmend = () => {
+    const o = A.ix.orders[A.orderId];
+    if (!o || (o.status !== 'sent' && o.status !== 'partial')) return;
+    delete A.drafts[o.id];
+    A.amend[o.id] = true;
+    render();
+  };
+  H.orderAmendCancel = () => {
+    delete A.amend[A.orderId];
+    delete A.drafts[A.orderId];
+    render();
+  };
+  H.orderAmendSave = async () => {
+    const o = A.ix.orders[A.orderId];
+    const d = A.drafts[o.id];
+    if (!d) return;
+    if (!d.lines.some(l => rowTotal(l) > 0)) return toast(TA.noLines, true);
+    if (!(await confirmBox(fmt(TA.amendConfirm, { number: o.number }), TA.amendSave))) return;
+    const payload = Object.assign(draftPayload(o, d), { amend: true });
+    const r = await mutate('admin.order.save', { order: payload }, TA.amendDone);
+    if (r.ok) {
+      delete A.amend[o.id];
+      delete A.drafts[o.id];
+      safeRender();
+    }
   };
   H.orderClose = async () => {
     if (!(await confirmBox(TA.closeConfirm, TA.closePartial))) return;
